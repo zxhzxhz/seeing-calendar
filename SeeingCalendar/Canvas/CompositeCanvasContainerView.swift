@@ -58,10 +58,13 @@ final class CompositeCanvasContainerView: UIView {
             guard oldValue != isLassoActive else { return }
             selectionOverlay.isLassoActive = isLassoActive
             canvasView.isUserInteractionEnabled = !isLassoActive
-            if isLassoActive {
-                // 套索与笔墨互斥：进入套索即退出选区编辑态
-                commitSelection(notify: false)
-                notifySelection()
+            if isLassoActive, !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
+                // 套索与笔墨互斥：进入套索即退出选区编辑态。
+                // 延后一拍执行，避免在 SwiftUI 更新回合内回调可观察状态。
+                Task { @MainActor [weak self] in
+                    guard let self, self.isLassoActive else { return }
+                    self.commitSelection(notify: true)
+                }
             }
         }
     }

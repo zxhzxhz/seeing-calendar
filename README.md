@@ -48,14 +48,19 @@ SeeingCalendar/
 
 ## 3. 核心架构要点
 
-### 3.1 四层复合画布与触控仲裁（spec 3.1）
+### 3.1 五层复合画布与触控仲裁（spec 3.1）
 
 ```
-Layer 4  SelectionOverlayView       虚线框 / 8 向手柄 / 旋转锚点 / 浮动菜单 / 套索捕获
-Layer 3  PKCanvasView               透明矢量手绘层（drawingPolicy 受“手指书写”开关控制）
-Layer 2  ImageLayerContainerView    自由变换贴图（无损裁剪：只改 contentsRect）
-Layer 1  PaperBackgroundView        恒定 1400×1400 正方底纸 + 网格参考线
+Layer 5  SelectionOverlayView       虚线框 / 8 向手柄 / 旋转锚点 / 原生菜单 / 套索捕获
+Layer 4  SelectionContentContainer  浮动选区（被取出的笔迹位图预览）
+Layer 3  ImageFrontContainerView    置于「笔迹之上」的贴图（置顶后进入）
+Layer 2  PKCanvasView               透明矢量手绘层（drawingPolicy 受“手指书写”开关控制）
+Layer 1  ImageLayerContainerView    笔迹之下的自由变换贴图（无损裁剪：只改 contentsRect）
+Layer 0  PaperBackgroundView        恒定 1400×1400 正方底纸 + 网格参考线
 ```
+
+`zIndex` 用一个整型同时编码层内序号与前后层归属（`zIndex >= 10000` 即位于笔迹之上），
+“置顶 / 置底”因此可以真正跨越手绘层，而无需为一次排序引入 schema 变更。
 
 `CompositeCanvasContainerView.hitTest(_:with:)` 在事件分发第一纳秒内做三件事：
 

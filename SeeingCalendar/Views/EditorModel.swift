@@ -113,10 +113,13 @@ final class EditorModel {
             self.isReplacingImage = true
         }
         host.onZoomChange = { [weak self] scale, fit in
-            guard let self else { return }
-            let expanded = fit > 0 && scale > fit * 1.05
-            if self.isCanvasExpanded != expanded {
-                self.isCanvasExpanded = expanded
+            // 首帧布局期间 UIKit 仍处于 SwiftUI 的更新回合内，延后一拍回写状态。
+            Task { @MainActor in
+                guard let self else { return }
+                let expanded = fit > 0 && scale > fit * 1.05
+                if self.isCanvasExpanded != expanded {
+                    self.isCanvasExpanded = expanded
+                }
             }
         }
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
