@@ -244,6 +244,8 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             cropBase = nil
             isGroupTransforming = false
         }
+        // 变换前的状态必须先入栈，保证缩放/旋转/裁剪可撤销。
+        pushHistory()
     }
 
     private func updateHandleGesture(_ kind: SelectionHandleKind, point: CGPoint) {
@@ -477,7 +479,6 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             onContentChange?()
         case .crop:
             guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
-            pushHistory()
             croppingImageID = id
             cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
             notifySelection()

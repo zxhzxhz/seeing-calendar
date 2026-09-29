@@ -142,6 +142,10 @@ final class CompositeCanvasContainerView: UIView {
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
         let point = gesture.location(in: self)
+        // 落在选区手柄 / 浮动菜单上：不参与“点空白取消选择”
+        let overlayPoint = convert(point, to: selectionOverlay)
+        if selectionOverlay.point(inside: overlayPoint, with: nil) { return }
+
         // 落在贴图上：交给贴图自身的点选逻辑
         for entity in imageViews.reversed() where !entity.isHidden {
             if entity.bounds.contains(entity.convert(point, from: self)) { return }
@@ -166,8 +170,13 @@ final class CompositeCanvasContainerView: UIView {
         notifySelection()
     }
 
+    /// 快照必须包含“浮动选区中的笔迹”，否则撤销/重做会丢内容。
     func snapshot() -> CanvasSnapshot {
-        CanvasSnapshot(drawing: canvasView.drawing, items: currentItems())
+        var drawing = canvasView.drawing
+        if !selectedStrokes.isEmpty {
+            drawing.strokes.append(contentsOf: selectedStrokes)
+        }
+        return CanvasSnapshot(drawing: drawing, items: currentItems())
     }
 
     func currentItems() -> [CanvasImageItem] {
@@ -213,8 +222,8 @@ final class CompositeCanvasContainerView: UIView {
     var canUndo: Bool { !history.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
+    /// 压入历史：快照已自包含浮动笔迹，因此无需打断当前选区。
     func pushHistory() {
-        commitSelection(notify: false)
         history.append(snapshot())
         if history.count > historyLimit { history.removeFirst() }
         redoStack.removeAll()
