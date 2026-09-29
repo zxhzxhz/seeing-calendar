@@ -54,7 +54,7 @@ enum SelectionAction: Equatable {
         case .copy: return "复制"
         case .cut: return "剪切"
         case .delete: return "删除"
-        case .transform: return "缩放变形"
+        case .transform: return "变形"
         case .finishTransform: return "完成变形"
         case .crop: return "裁剪"
         case .finishCrop: return "完成裁剪"

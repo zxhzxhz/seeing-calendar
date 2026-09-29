@@ -479,6 +479,38 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         refreshSelectionOverlay()
     }
 
+    // MARK: - 选区内部拖动（整体平移）
+
+    func selectionOverlay(_ overlay: SelectionOverlayView,
+                          didDragInterior point: CGPoint,
+                          state: UIGestureRecognizer.State) {
+        switch state {
+        case .began:
+            isAdjustingSelection = true
+            selectionOverlay.dismissMenu()
+            groupBaseBounds = selectionBounds()
+            groupBaseTransforms = imageViews.reduce(into: [:]) { partial, view in
+                if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }
+            }
+            gestureBasePoint = point
+            pushHistory()
+        case .changed:
+            let delta = CGPoint(x: point.x - gestureBasePoint.x, y: point.y - gestureBasePoint.y)
+            applyGroupDelta(CGAffineTransform.worldTranslation(delta))
+        case .ended, .cancelled, .failed:
+            isAdjustingSelection = false
+            if let delta = groupAccumulatedDelta, delta != .identity {
+                bakeStrokes(delta: delta)
+            }
+            groupAccumulatedDelta = nil
+            groupBaseTransforms = [:]
+            notifySelection()
+            onContentChange?()
+        default:
+            break
+        }
+    }
+
     // MARK: - 套索
 
     func selectionOverlay(_ overlay: SelectionOverlayView, didCompleteLasso points: [CGPoint]) {
@@ -494,6 +526,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     // MARK: - 菜单动作
 
     func selectionOverlay(_ overlay: SelectionOverlayView, didSelect action: SelectionAction) {
+        // 原生菜单退场可能把触摸透传到画布，这里登记 0.35s 保护窗口，
+        // 避免刚建立的选择状态被「点空白取消选中」立刻清掉。
+        menuActionGuardUntil = Date().addingTimeInterval(0.35)
         switch action {
         case .copy:
             copySelectionToClipboard()

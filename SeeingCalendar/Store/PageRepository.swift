@@ -88,8 +88,35 @@ struct PageRepository {
         context.insert(page)
         page.day = day
         day.updatedAt = .now
+        day.syncPageCount()
         try? context.save()
         return page
+    }
+
+    /// 按给定顺序重排页面：index 即位置，Page 1 自动成为月历封面。
+    func applyPageOrder(_ ordered: [DrawingPage], in day: DayRecord) {
+        for (position, page) in ordered.enumerated() where page.index != position {
+            page.index = position
+        }
+        day.syncPageCount()
+        day.updatedAt = .now
+        try? context.save()
+    }
+
+    /// 一次性回填历史数据的 pageCount（旧库升级到本版本时执行一次）。
+    func backfillPageCountsIfNeeded() {
+        let key = "didBackfillPageCounts_v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let descriptor = FetchDescriptor<DayRecord>()
+        let days = (try? context.fetch(descriptor)) ?? []
+        for day in days {
+            let actual = day.pages.count
+            if day.pageCount != actual {
+                day.pageCount = actual
+            }
+        }
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     func deletePage(_ page: DrawingPage) {
@@ -108,6 +135,7 @@ struct PageRepository {
         for (index, page) in ordered.enumerated() where page.index != index {
             page.index = index
         }
+        day.syncPageCount()
         try? context.save()
     }
 

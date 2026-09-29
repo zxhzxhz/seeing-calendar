@@ -8,6 +8,10 @@ protocol SelectionOverlayDelegate: AnyObject {
                           to point: CGPoint,
                           state: UIGestureRecognizer.State)
     func selectionOverlay(_ overlay: SelectionOverlayView, didCompleteLasso points: [CGPoint])
+    /// 复合选区内拖动：整体平移。
+    func selectionOverlay(_ overlay: SelectionOverlayView,
+                          didDragInterior point: CGPoint,
+                          state: UIGestureRecognizer.State)
 }
 
 /// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **iOS 原生编辑菜单** / 自定义套索捕获。
@@ -83,6 +87,38 @@ final class SelectionOverlayView: UIView {
         layer.addSublayer(lassoLayer)
 
         addInteraction(editMenu)
+        addGestureRecognizer(interiorPan)
+    }
+
+    /// 复合选区内部拖动 = 整体平移。
+    private lazy var interiorPan: UIPanGestureRecognizer = {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleInteriorPan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        pan.cancelsTouchesInView = false
+        return pan
+    }()
+
+    @objc private func handleInteriorPan(_ gesture: UIPanGestureRecognizer) {
+        guard isInteriorDraggable else { return }
+        delegate?.selectionOverlay(self, didDragInterior: gesture.location(in: self), state: gesture.state)
+    }
+
+    /// 复合选区（纯笔迹 / 笔迹+贴图）内部可整体拖动。
+    /// 单图与裁剪态不接管内部：那两种状态由贴图自身的手势负责移动。
+    var isInteriorDraggable: Bool {
+        switch mode {
+        case .composite, .compositeTransform: return true
+        default: return false
+        }
+    }
+
+    /// 复合选区的世界包围盒。
+    private var compositeRect: CGRect? {
+        switch mode {
+        case .composite(let rect), .compositeTransform(let rect): return rect
+        default: return nil
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -93,9 +129,9 @@ final class SelectionOverlayView: UIView {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         if isLassoActive { return true }
-        for subview in subviews where !subview.isHidden && subview.alpha > 0.01 {
-            if subview.point(inside: convert(point, to: subview), with: event) { return true }
-        }
+        if hitsInteractiveElement(point) { return true }
+        // 复合选区内部同样属于「选区自身」：用于整体拖动，也用于避免误清选区。
+        if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(point) { return true }
         return false
     }
 
@@ -112,6 +148,7 @@ final class SelectionOverlayView: UIView {
         for subview in subviews where !subview.isHidden && subview.alpha > 0.01 {
             if subview.point(inside: convert(point, to: subview), with: nil) { return true }
         }
+        if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(point) { return true }
         return false
     }
 
@@ -212,7 +249,8 @@ final class SelectionOverlayView: UIView {
     /// 菜单锚点放在选区**下方**，避免遮挡顶部的旋转控制手柄。
     private func menuAnchorPoint() -> CGPoint? {
         let scale = max(0.05, contentScale)
-        let gap = 22 * scale
+        // 间距刻意放大：菜单必须完全避开选区边缘的缩放/旋转手柄。
+        let gap = 46 * scale
         switch mode {
         case .none:
             return nil
@@ -377,10 +415,21 @@ extension SelectionOverlayView: UIEditMenuInteractionDelegate {
 }
 
 /// 单个控制手柄：白色实心 + 蓝色描边 + 可选图形。
+/// 视觉尺寸保持精致，但命中区域按 HIG 补正到 44pt —— 解决“控制点很难点到”。
 @MainActor
 final class SelectionHandleView: UIView {
+    /// 最小可点边长（屏幕 pt，等价于本视图 bounds 单位：手柄做了 1/zoom 反向缩放）。
+    static let minimumHitSize: CGFloat = 44
+
     let kind: SelectionHandleKind
     let baseSize: CGSize
+
+    /// 判定补正：视觉 16pt 的手柄拥有 44pt 的可点范围。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let dx = max(0, (Self.minimumHitSize - bounds.width) / 2)
+        let dy = max(0, (Self.minimumHitSize - bounds.height) / 2)
+        return bounds.insetBy(dx: -dx, dy: -dy).contains(point)
+    }
 
     init(kind: SelectionHandleKind, baseSize: CGSize) {
         self.kind = kind

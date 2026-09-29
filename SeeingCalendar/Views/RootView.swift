@@ -414,6 +414,8 @@ struct RootView: View {
     }
 
     private func bootstrap() async {
+        // 旧库升级：一次性回填冗余页数（此后渲染路径不再触碰 pages 关系）。
+        repository.backfillPageCountsIfNeeded()
         let fallback = repository.ensureDefaultWorkspace()
         if selectedWorkspaceUUID == nil {
             selectedWorkspaceUUID = workspaces.first?.uuid ?? fallback.uuid

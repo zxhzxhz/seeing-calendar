@@ -21,7 +21,6 @@ struct DayCellView: View {
     let pageCount: Int
     let events: [CalendarEvent]
     let holiday: WorkRestStatus
-    let isSelected: Bool
     let isPulsing: Bool
     /// 脉冲代次：每次「今天」定位都递增，保证动画可重复触发。
     let pulseID: Int
@@ -58,7 +57,7 @@ struct DayCellView: View {
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: isSelected ? 2.5 : 1)
+                    .strokeBorder(borderColor, lineWidth: 1)
             )
             .overlay {
                 if isPulsing {
@@ -80,8 +79,8 @@ struct DayCellView: View {
         .aspectRatio(1, contentMode: .fit)
     }
 
+    /// 选中环不在这里绘制（由 MonthGridView 单独成层，避免点选时重算 126 个格子）。
     private var borderColor: Color {
-        if isSelected { return .accentColor }
         if isToday { return .accentColor.opacity(0.55) }
         return Color.primary.opacity(inCurrentMonth ? 0.10 : 0.05)
     }

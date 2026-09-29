@@ -31,6 +31,9 @@ final class DayRecord {
     var dateKey: String
     var note: String
     var updatedAt: Date
+    /// 冗余页数：月历一次要渲染 126 个格子，若逐格访问 `pages` 关系会触发大量 SwiftData fault，
+    /// 在真机上表现为「点选日期有十分明显的延迟」。这里用整型冗余把 fault 从渲染路径上彻底移除。
+    var pageCount: Int = 0
     var workspace: Workspace?
 
     @Relationship(deleteRule: .cascade, inverse: \DrawingPage.day)
@@ -50,6 +53,11 @@ final class DayRecord {
 
     var orderedPages: [DrawingPage] {
         pages.sorted { $0.index < $1.index }
+    }
+
+    /// 与 `pages.count` 对齐（关系变化后调用）。
+    func syncPageCount() {
+        pageCount = pages.count
     }
 
     var coverPage: DrawingPage? {

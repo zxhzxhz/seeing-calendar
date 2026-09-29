@@ -10,13 +10,14 @@ final class CompositeCanvasContainerView: UIView {
     let paperView = PaperBackgroundView()
     /// 笔迹之下的贴图层。
     let imageContainerView = UIView()
-    let canvasView = PKCanvasView()
+    let canvasView = TrackingCanvasView()
     /// 笔迹之上的贴图层（“置顶”后进入此层）。
     let imageFrontContainerView = UIView()
     /// 浮动选区内容（被取出的笔迹位图预览）。
     let selectionContentContainer = UIView()
     /// 选中贴图的**临时置顶**容器：保证选中态永远压在最上层，取消选中后归位。
     let selectionTopContainerView = UIView()
+    let eraserIndicator = EraserIndicatorView()
     let selectionOverlay = SelectionOverlayView()
 
     var onContentChange: (() -> Void)?
@@ -32,6 +33,8 @@ final class CompositeCanvasContainerView: UIView {
     private let historyLimit = 30
     private var isProgrammatic = false
     private var isToolSessionActive = false
+    /// 原生菜单动作后的点击保护窗口。
+    var menuActionGuardUntil: Date = .distantPast
 
     // 选区状态
     var selectedImageIDs: [UUID] = []
@@ -83,7 +86,23 @@ final class CompositeCanvasContainerView: UIView {
     }
 
     var overlayScale: CGFloat = 1 {
-        didSet { selectionOverlay.contentScale = overlayScale }
+        didSet {
+            selectionOverlay.contentScale = overlayScale
+            eraserIndicator.contentScale = overlayScale
+        }
+    }
+
+    /// 橡皮是否处于激活状态（决定是否显示有效范围圈）。
+    var isEraserActive: Bool = false {
+        didSet {
+            eraserIndicator.isHidden = !isEraserActive
+            if !isEraserActive { eraserIndicator.update(point: nil) }
+        }
+    }
+
+    /// 橡皮有效范围（画布世界坐标下的直径，与 PKEraserTool.width 保持一致）。
+    var eraserWidth: CGFloat = 24 {
+        didSet { eraserIndicator.eraserWidth = eraserWidth }
     }
 
     // MARK: - 生命周期
@@ -116,6 +135,14 @@ final class CompositeCanvasContainerView: UIView {
         imageFrontContainerView.backgroundColor = .clear
         addSubview(imageFrontContainerView)
 
+        addSubview(eraserIndicator)
+        canvasView.onTouchPoint = { [weak self] point in
+            guard let self else { return }
+            // 仅在橡皮激活时显示有效范围圈；其余工具下彻底隐藏。
+            self.eraserIndicator.isHidden = !self.isEraserActive
+            self.eraserIndicator.update(point: self.isEraserActive ? point : nil)
+        }
+
         selectionContentContainer.backgroundColor = .clear
         selectionContentContainer.isUserInteractionEnabled = false
         addSubview(selectionContentContainer)
@@ -138,6 +165,7 @@ final class CompositeCanvasContainerView: UIView {
         imageContainerView.frame = CGRect(origin: .zero, size: size)
         canvasView.frame = CGRect(origin: .zero, size: size)
         imageFrontContainerView.frame = CGRect(origin: .zero, size: size)
+        eraserIndicator.frame = CGRect(origin: .zero, size: size)
         selectionContentContainer.frame = CGRect(origin: .zero, size: size)
         selectionTopContainerView.frame = CGRect(origin: .zero, size: size)
         selectionOverlay.frame = CGRect(origin: .zero, size: size)
@@ -183,6 +211,10 @@ final class CompositeCanvasContainerView: UIView {
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
         let point = gesture.location(in: self)
+
+        // 刚从原生菜单点选动作后的一小段时间内忽略画布点击：
+        // 菜单退场时可能把触摸透传下来，否则会立刻把刚建立的选择清掉（表现为“变形点了没反应”）。
+        if Date() < menuActionGuardUntil { return }
 
         // 落在选区手柄 / 原生菜单上：不参与“点空白取消选择”
         if selectionOverlay.hitsInteractiveElement(point) { return }

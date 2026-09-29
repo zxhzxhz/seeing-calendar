@@ -1,6 +1,11 @@
 import SwiftUI
 
 /// 7×6 月历矩阵：固定 42 格，单元格严格 1:1，宽度自适应决定 LOD 分级。
+///
+/// 性能约定（真机实测：点选日期曾有十分明显的延迟）：
+/// ① 单元格的输入不含「是否选中」——选中环由本视图单独一层绘制，点选时 126 个格子无需重算；
+/// ② 页数取自 `DayRecord.pageCount` 冗余字段，渲染路径上不触碰 SwiftData 关系（避免 fault）；
+/// ③ 单击/双击由本视图自己做时间判定，不再依赖 SwiftUI 单/双击手势仲裁（否则单击要等 ~300ms）。
 struct MonthGridView: View {
     let month: Date
     let selectedDate: Date
@@ -17,10 +22,14 @@ struct MonthGridView: View {
     let onOpen: (Date) -> Void
 
     @State private var thumbnails: [String: UIImage] = [:]
+    @State private var lastTapKey: String?
+    @State private var lastTapDate: Date?
 
     static let spacing: CGFloat = 6
     static let weekdayHeaderHeight: CGFloat = 22
     static let minimumCellWidth: CGFloat = 28
+    /// 双击判定窗口（秒）。
+    static let doubleTapWindow: TimeInterval = 0.32
 
     private let spacing = MonthGridView.spacing
     private let weekdayHeaderHeight = MonthGridView.weekdayHeaderHeight
@@ -30,13 +39,13 @@ struct MonthGridView: View {
     /// 单格 1:1 边长：取「横向可用宽」与「纵向可用高」的较小者。
     static func cellWidth(availableSize: CGSize) -> CGFloat {
         let byWidth = (availableSize.width - spacing * 6) / 7
-        let byHeight = (availableSize.height - spacing * 5 - weekdayHeaderHeight) / 6
+        let byHeight = (availableSize.height - spacing * 6 - weekdayHeaderHeight) / 6
         return max(minimumCellWidth, floor(min(byWidth, byHeight)))
     }
 
-    /// 整块月历（含星期表头）的高度。
+    /// 整块月历高度：7 行（1 行表头 + 6 行日期）之间的 6 道间距。
     static func gridHeight(cellWidth: CGFloat) -> CGFloat {
-        cellWidth * 6 + spacing * 5 + weekdayHeaderHeight
+        cellWidth * 6 + spacing * 6 + weekdayHeaderHeight
     }
 
     private var cellWidth: CGFloat {
@@ -46,19 +55,22 @@ struct MonthGridView: View {
     private var tier: CellLODTier { CellLODTier.resolve(for: cellWidth) }
 
     var body: some View {
-        VStack(spacing: spacing) {
-            weekdayHeader
-            ForEach(0..<6, id: \.self) { row in
-                HStack(spacing: spacing) {
-                    ForEach(0..<7, id: \.self) { column in
-                        let index = row * 7 + column
-                        cell(for: gridDates[index])
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: spacing) {
+                weekdayHeader
+                ForEach(0..<6, id: \.self) { row in
+                    HStack(spacing: spacing) {
+                        ForEach(0..<7, id: \.self) { column in
+                            let index = row * 7 + column
+                            cell(for: gridDates[index])
+                        }
                     }
                 }
             }
+            selectionRing
         }
         .frame(width: cellWidth * 7 + spacing * 6,
-               height: cellWidth * 6 + spacing * 5 + weekdayHeaderHeight)
+               height: MonthGridView.gridHeight(cellWidth: cellWidth))
         .frame(maxWidth: .infinity, alignment: .top)
         .task(id: token) {
             await loadThumbnails()
@@ -81,10 +93,26 @@ struct MonthGridView: View {
                 Text(symbol)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
-                    .frame(width: cellWidth, height: weekdayHeaderHeight - spacing)
+                    .frame(width: cellWidth, height: weekdayHeaderHeight)
             }
         }
         .frame(height: weekdayHeaderHeight)
+    }
+
+    /// 选中环：独立一层，位置由选中日期算出，不改变任何格子的输入。
+    @ViewBuilder
+    private var selectionRing: some View {
+        if let index = gridDates.firstIndex(where: { CalendarUtils.isSameDay($0, selectedDate) }) {
+            let row = index / 7
+            let column = index % 7
+            RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous)
+                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                .frame(width: cellWidth, height: cellWidth)
+                .offset(x: CGFloat(column) * (cellWidth + spacing),
+                        y: weekdayHeaderHeight + spacing + CGFloat(row) * (cellWidth + spacing))
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
     }
 
     private func cell(for date: Date) -> some View {
@@ -94,18 +122,31 @@ struct MonthGridView: View {
         return DayCellView(date: date,
                            inCurrentMonth: inMonth,
                            thumbnail: thumbnails[key],
-                           pageCount: record?.pages.count ?? 0,
+                           pageCount: record?.pageCount ?? 0,   // 冗余字段，不触发关系 fault
                            events: eventsByDay[key] ?? [],
                            holiday: holidays[key] ?? .normal,
-                           isSelected: CalendarUtils.isSameDay(date, selectedDate),
                            isPulsing: pulseKey == key,
                            pulseID: pulseID,
                            tier: tier)
             .frame(width: cellWidth, height: cellWidth)
             .matchedTransitionSource(id: transitionID(for: key), in: zoomNamespace)
-            .onTapGesture(count: 2) { onOpen(date) }
-            .onTapGesture { onSelect(date) }
+            .onTapGesture { handleTap(date: date, key: key) }
             .accessibilityLabel(CalendarUtils.dayTitle(date))
+    }
+
+    /// 自行判定单击/双击：单击立即生效（不再等待系统双击超时），双击进入画布。
+    private func handleTap(date: Date, key: String) {
+        let now = Date()
+        if let lastKey = lastTapKey, lastKey == key,
+           let lastDate = lastTapDate, now.timeIntervalSince(lastDate) < Self.doubleTapWindow {
+            lastTapKey = nil
+            lastTapDate = nil
+            onOpen(date)
+            return
+        }
+        lastTapKey = key
+        lastTapDate = now
+        onSelect(date)
     }
 
     /// 转场源 ID 必须全局唯一：相邻月份的网格会包含同一天，
