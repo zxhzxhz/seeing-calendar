@@ -9,6 +9,8 @@
 //  「开启手指输入后，切换任何笔/工具都用同一支笔」。
 //  本探针只打印事实，供实现层取舍；断言式门禁见 verify_transform_math.swift。
 //
+import Darwin
+import Foundation
 import Observation
 
 @Observable
