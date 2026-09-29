@@ -4,11 +4,13 @@
 版本号规则：`MARKETING_VERSION` 见 `project.yml`（用 `python scripts/bump_version.py` 自增），
 `CFBundleVersion`（BUILD 号）由 CI 使用 GitHub Actions 的 run number 注入，因此每个 IPA 都能追溯到具体构建。
 
-## [Unreleased]
+## [1.0.2] — 回归修复
 
-### 待归档
-
-- （填写本次变更）
+### 修复
+- **选中贴图后无法移动（1.0.1 引入的回归）**：选中即「临时置顶」会把贴图重挂载到顶层容器，
+  而 `removeFromSuperview()` 会立即取消该视图正在进行的手势 —— pan 在手指还没移动时就被取消。
+  修法：`ImageEntityView.isMoving` 在 `.began` 最先置位、`.ended` 最先复位；
+  拖拽期间只做高亮，重挂载推迟到 `onEndMove`；`normalizeZOrder()` 跳过已临时置顶的实体。
 
 ## [1.0.1] — 真机复测第二轮修复
 

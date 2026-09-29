@@ -625,8 +625,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     /// 归一化：后层 0..n、前层 frontBase..frontBase+m，并按序重排子视图堆叠。
     func normalizeZOrder() {
-        let back = imageViews.filter { !$0.canvasItem.isInFront }.sorted { $0.zIndex < $1.zIndex }
-        let front = imageViews.filter(\.canvasItem.isInFront).sorted { $0.zIndex < $1.zIndex }
+        // 临时置顶（选中态）的实体不参与归位，否则选中态会被拽回下层。
+        let back = imageViews
+            .filter { !$0.canvasItem.isInFront && $0.superview !== selectionTopContainerView }
+            .sorted { $0.zIndex < $1.zIndex }
+        let front = imageViews
+            .filter { $0.canvasItem.isInFront && $0.superview !== selectionTopContainerView }
+            .sorted { $0.zIndex < $1.zIndex }
         for (index, entity) in back.enumerated() {
             entity.zIndex = index
             imageContainerView.addSubview(entity)

@@ -275,6 +275,8 @@ final class CompositeCanvasContainerView: UIView {
         entity.onEndMove = { [weak self] _ in
             guard let self else { return }
             self.isAdjustingSelection = false
+            // 手指脱离后才把选中贴图重挂载到顶层容器（拖拽中重挂载会取消手势）。
+            self.elevateSelection()
             self.refreshSelectionOverlay()
             self.onContentChange?()
         }
@@ -303,7 +305,7 @@ final class CompositeCanvasContainerView: UIView {
     /// 取消选中：把所有临时置顶的贴图归位并撤掉高亮。
     func releaseElevatedSelection() {
         for entity in imageViews {
-            if entity.superview === selectionTopContainerView {
+            if entity.superview === selectionTopContainerView, !entity.isMoving {
                 place(entity, elevated: false)
             }
             entity.setHighlighted(false)
@@ -311,11 +313,14 @@ final class CompositeCanvasContainerView: UIView {
     }
 
     /// 选中：临时高亮置顶。
+    /// 注意：正在被拖动的实体只做高亮，重挂载推迟到 `onEndMove` ——
+    /// `removeFromSuperview` 会立即取消该视图进行中的 pan 手势，导致“选中后无法移动”。
     func elevateSelection() {
         for id in selectedImageIDs {
             guard let entity = entity(for: id) else { continue }
-            place(entity, elevated: true)
             entity.setHighlighted(true)
+            guard !entity.isMoving else { continue }
+            place(entity, elevated: true)
         }
     }
 

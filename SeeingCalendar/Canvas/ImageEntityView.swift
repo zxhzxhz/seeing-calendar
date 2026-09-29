@@ -21,6 +21,9 @@ final class ImageEntityView: UIImageView {
     private var gestureBase: CGAffineTransform?
     private var gestureStartPoint: CGPoint?
 
+    /// 是否正在被拖动。拖拽期间严禁重挂载（removeFromSuperview 会取消进行中的手势）。
+    private(set) var isMoving = false
+
     init(item: CanvasImageItem) {
         self.itemID = item.id
         self.fileName = item.fileName
@@ -147,6 +150,8 @@ final class ImageEntityView: UIImageView {
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
+            // 必须先置位：onSelect 会触发“选中置顶”，此时若重挂载会立刻打断本手势。
+            isMoving = true
             gestureBase = worldTransform
             gestureStartPoint = gesture.location(in: superview)
             onSelect?(self)
@@ -161,6 +166,8 @@ final class ImageEntityView: UIImageView {
             applyWorldTransform()
             onTransformChanged?(self)
         case .ended, .cancelled, .failed:
+            // 先复位再回调：容器会在 onEndMove 里补做延迟的“置顶重挂载”。
+            isMoving = false
             gestureBase = nil
             gestureStartPoint = nil
             onEndMove?(self)
