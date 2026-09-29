@@ -402,6 +402,11 @@ final class EditorModel {
         canvasHost?.zoomToFit(animated: true)
     }
 
+    /// 选区动作统一入口（浮动菜单与底部工具条共用）。
+    func performSelectionAction(_ action: SelectionAction) {
+        canvasHost?.canvas.perform(action)
+    }
+
     /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
     func select(tool: CanvasTool) {
         if isLassoActive {

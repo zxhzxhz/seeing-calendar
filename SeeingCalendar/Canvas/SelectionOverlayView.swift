@@ -116,11 +116,22 @@ final class SelectionOverlayView: UIView {
     /// 关键：先让子视图出手（手柄 / 菜单 / 内部拖动区），**即使处于套索模式**；
     /// 都未命中时才由覆盖层自己接管套索。否则套索模式下手柄永远点不到。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // 手柄的 44pt 判定区在小图上会互相重叠，此时必须按「离哪个手柄中心最近」来裁决，
+        // 否则会点到相邻手柄（表现为“拖角手柄却只动了一个边”）。
+        var nearestHandle: (view: SelectionHandleView, distance: CGFloat)?
         for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
             let local = convert(point, to: subview)
             guard subview.point(inside: local, with: event) else { continue }
+            if let handle = subview as? SelectionHandleView {
+                let distance = hypot(local.x - handle.bounds.midX, local.y - handle.bounds.midY)
+                if nearestHandle == nil || distance < nearestHandle!.distance {
+                    nearestHandle = (handle, distance)
+                }
+                continue
+            }
             if let hit = subview.hitTest(local, with: event) { return hit }
         }
+        if let nearestHandle { return nearestHandle.view }
         return isLassoActive ? self : nil
     }
 
@@ -273,8 +284,8 @@ final class SelectionOverlayView: UIView {
     /// 菜单锚点放在选区**下方**，避免遮挡顶部的旋转控制手柄。
     private func menuAnchorPoint() -> CGPoint? {
         let scale = max(0.05, contentScale)
-        // 间距刻意放大：菜单必须完全避开选区边缘的缩放/旋转手柄。
-        let gap = 46 * scale
+        // 间距 = 手柄命中半径(22) + 菜单半高(≈25) + 余量 → 确保菜单完全不压手柄。
+        let gap = 60 * scale
         switch mode {
         case .none:
             return nil
@@ -282,7 +293,10 @@ final class SelectionOverlayView: UIView {
             return CGPoint(x: rect.midX, y: rect.maxY + gap)
         case .image(let quad), .cropping(let quad):
             guard let lowest = quad.max(by: { $0.y < $1.y }) else { return nil }
-            return CGPoint(x: lowest.x, y: lowest.y + gap)
+            // 关键：用**下边中点**而不是最下方那个角点 —— 角点即右下角，
+            // 系统以锚点为中心弹出菜单，菜单会直接盖住右下角缩放手柄与底部中点裁剪手柄。
+            let bottomCenterX = quad.map(\.x).reduce(0, +) / CGFloat(quad.count)
+            return CGPoint(x: bottomCenterX, y: lowest.y + gap)
         }
     }
 
@@ -340,18 +354,17 @@ final class SelectionOverlayView: UIView {
         return CGPoint(x: top.x + dx / length * offset, y: top.y + dy / length * offset)
     }
 
+    /// 浮动菜单只用于「对象级」动作。
+    /// 裁剪与变形是**模式级**动作，放在编辑器底部工具条 —— 避免菜单压住正在使用的手柄
+    /// （这正是「裁剪控制点第一次拖动会停住」的真实原因：第一次点到了菜单，菜单随即收起，第二次才点到手柄）。
     private func menuActions(for mode: Mode) -> [SelectionAction] {
         switch mode {
-        case .none:
+        case .none, .cropping, .compositeTransform:
             return []
         case .composite:
             return [.copy, .cut, .delete, .transform]
-        case .compositeTransform:
-            return [.finishTransform]
         case .image:
             return [.copy, .crop, .replace, .bringToFront, .sendToBack, .delete]
-        case .cropping:
-            return [.finishCrop, .cancelCrop]
         }
     }
 

@@ -85,11 +85,16 @@ final class ImageEntityView: UIImageView {
 
     /// 将模型矩阵投影到 UIKit 视图（center + 线性变换，二者组合等价于 worldTransform）。
     func applyWorldTransform() {
+        // 交互期禁用隐式动画：bounds / position / contentsRect 都带默认 0.25s 隐式动画，
+        // 拖拽时会让图元明显滞后于手指（裁剪时尤其像"卡住"）。
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         let size = visibleSize
         bounds = CGRect(origin: .zero, size: size)
         center = worldTransform.applied(to: CGPoint(x: size.width / 2, y: size.height / 2))
         transform = worldTransform.linearPart
         layer.contentsRect = cropRect
+        CATransaction.commit()
     }
 
     func update(cropRect: CGRect, worldTransform: CGAffineTransform) {
@@ -105,10 +110,13 @@ final class ImageEntityView: UIImageView {
 
     /// 选中态临时高亮（不改变任何几何，纯视觉提示）。
     func setHighlighted(_ highlighted: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         layer.shadowColor = UIColor.systemBlue.cgColor
         layer.shadowOpacity = highlighted ? 0.55 : 0
         layer.shadowRadius = highlighted ? 10 : 0
         layer.shadowOffset = .zero
+        CATransaction.commit()
     }
 
     /// 世界坐标系（父视图坐标系）中的可见四角。

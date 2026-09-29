@@ -414,44 +414,34 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     // MARK: - 复合选区整体变换
 
+    /// 手柄在世界坐标下的原始位置（以给定矩形为准，与覆盖层的排布规则保持一致）。
+    private func groupHandlePoint(_ index: Int, in rect: CGRect) -> CGPoint {
+        let corners = CanvasGeometry.corners(of: rect)
+        if index < 4 { return corners[index] }
+        let edges = [CanvasGeometry.midpoint(corners[0], corners[1]),
+                     CanvasGeometry.midpoint(corners[1], corners[2]),
+                     CanvasGeometry.midpoint(corners[2], corners[3]),
+                     CanvasGeometry.midpoint(corners[3], corners[0])]
+        let edgeIndex = min(max(index - 4, 0), edges.count - 1)
+        return edges[edgeIndex]
+    }
+
+    /// 整体缩放：**以套索确定的整体选中区域中心为不动点**，等比缩放，
+    /// 手柄只决定缩放比例（把手指位移投影到「中心 → 手柄」这条轴上），行为与贴图缩放一致。
     private func applyGroupScale(index: Int, point: CGPoint) {
         let base = groupBaseBounds
         guard !base.isNull else { return }
-        let corners = CanvasGeometry.corners(of: base)
-        var anchor: CGPoint
-        var scaleX: CGFloat = 1
-        var scaleY: CGFloat = 1
+        let center = CGPoint(x: base.midX, y: base.midY)
+        let origin = groupHandlePoint(index, in: base)
+        let axis = CGPoint(x: origin.x - center.x, y: origin.y - center.y)
+        let lengthSquared = axis.x * axis.x + axis.y * axis.y
+        guard lengthSquared > 1 else { return }
 
-        if index < 4 {
-            anchor = corners[(index + 2) % 4]
-            let corner = corners[index]
-            let vectorX = corner.x - anchor.x
-            let vectorY = corner.y - anchor.y
-            let hasX = abs(vectorX) > 1
-            let hasY = abs(vectorY) > 1
-            let candidateX = hasX ? max(0.05, (point.x - anchor.x) / vectorX) : 1
-            let candidateY = hasY ? max(0.05, (point.y - anchor.y) / vectorY) : 1
-            let uniform = abs(vectorX) >= abs(vectorY) ? candidateX : candidateY
-            scaleX = uniform
-            scaleY = uniform
-        } else {
-            switch index {
-            case 4:
-                anchor = CanvasGeometry.midpoint(corners[3], corners[2])
-                scaleY = max(0.05, (anchor.y - point.y) / max(1, base.height))
-            case 5:
-                anchor = CanvasGeometry.midpoint(corners[0], corners[3])
-                scaleX = max(0.05, (point.x - anchor.x) / max(1, base.width))
-            case 6:
-                anchor = CanvasGeometry.midpoint(corners[0], corners[1])
-                scaleY = max(0.05, (point.y - anchor.y) / max(1, base.height))
-            default:
-                anchor = CanvasGeometry.midpoint(corners[1], corners[2])
-                scaleX = max(0.05, (anchor.x - point.x) / max(1, base.width))
-            }
-        }
+        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        let ratio = (delta.x * axis.x + delta.y * axis.y) / lengthSquared
+        let uniform = max(0.05, ratio)
 
-        applyGroupDelta(CGAffineTransform.worldScale(anchor: anchor, sx: scaleX, sy: scaleY))
+        applyGroupDelta(CGAffineTransform.worldScale(anchor: center, sx: uniform, sy: uniform))
     }
 
     private func applyGroupRotation(point: CGPoint) {
@@ -525,6 +515,11 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     // MARK: - 菜单动作
 
     func selectionOverlay(_ overlay: SelectionOverlayView, didSelect action: SelectionAction) {
+        perform(action)
+    }
+
+    /// 选区动作总入口：浮动菜单与编辑器底部工具条共用同一条实现。
+    func perform(_ action: SelectionAction) {
         // 原生菜单退场可能把触摸透传到画布，这里登记 0.35s 保护窗口，
         // 避免刚建立的选择状态被「点空白取消选中」立刻清掉。
         menuActionGuardUntil = Date().addingTimeInterval(0.35)

@@ -215,6 +215,9 @@ struct DayEditorView: View {
 
     private func toolBar(model: EditorModel) -> some View {
         HStack(spacing: 14) {
+            // 模式级动作（裁剪 / 变形）放在底部工具条：不遮挡任何手柄。
+            contextualActions(model: model)
+
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(!model.canUndo)
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
@@ -321,6 +324,28 @@ struct DayEditorView: View {
     }
 
     @ViewBuilder
+    @ViewBuilder
+    private func contextualActions(model: EditorModel) -> some View {
+        switch model.selectionKind {
+        case .cropping:
+            Button("取消") { model.performSelectionAction(.cancelCrop) }
+                .font(.system(size: 13))
+            Button("完成裁剪") { model.performSelectionAction(.finishCrop) }
+                .font(.system(size: 13, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            Divider().frame(height: 22)
+        case .compositeTransform:
+            Button("完成变形") { model.performSelectionAction(.finishTransform) }
+                .font(.system(size: 13, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            Divider().frame(height: 22)
+        default:
+            EmptyView()
+        }
+    }
+
     private func penSettings(model: EditorModel) -> some View {
         if model.activeTool == .eraser {
             eraserSettings(model: model)
