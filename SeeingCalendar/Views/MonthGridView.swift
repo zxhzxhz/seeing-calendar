@@ -12,17 +12,30 @@ struct MonthGridView: View {
     let onOpen: (Date) -> Void
 
     @State private var thumbnails: [String: UIImage] = [:]
-    @State private var loadedToken: ThumbToken?
 
-    private let spacing: CGFloat = 6
-    private let weekdayHeaderHeight: CGFloat = 22
+    static let spacing: CGFloat = 6
+    static let weekdayHeaderHeight: CGFloat = 22
+    static let minimumCellWidth: CGFloat = 28
+
+    private let spacing = MonthGridView.spacing
+    private let weekdayHeaderHeight = MonthGridView.weekdayHeaderHeight
 
     private var gridDates: [Date] { CalendarUtils.gridDates(forMonthContaining: month) }
 
-    private var cellWidth: CGFloat {
+    /// 单格 1:1 边长：取「横向可用宽」与「纵向可用高」的较小者。
+    static func cellWidth(availableSize: CGSize) -> CGFloat {
         let byWidth = (availableSize.width - spacing * 6) / 7
         let byHeight = (availableSize.height - spacing * 5 - weekdayHeaderHeight) / 6
-        return max(28, floor(min(byWidth, byHeight)))
+        return max(minimumCellWidth, floor(min(byWidth, byHeight)))
+    }
+
+    /// 整块月历（含星期表头）的高度。
+    static func gridHeight(cellWidth: CGFloat) -> CGFloat {
+        cellWidth * 6 + spacing * 5 + weekdayHeaderHeight
+    }
+
+    private var cellWidth: CGFloat {
+        MonthGridView.cellWidth(availableSize: availableSize)
     }
 
     private var tier: CellLODTier { CellLODTier.resolve(for: cellWidth) }

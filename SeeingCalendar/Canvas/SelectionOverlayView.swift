@@ -10,8 +10,8 @@ protocol SelectionOverlayDelegate: AnyObject {
     func selectionOverlay(_ overlay: SelectionOverlayView, didCompleteLasso points: [CGPoint])
 }
 
-/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / 浮动菜单 / 自定义套索捕获。
-/// 所有视觉元素均按 `contentScale = 1/zoomScale` 反向缩放，保证屏幕上的尺寸恒定。
+/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **iOS 原生编辑菜单** / 自定义套索捕获。
+/// 所有视觉元素按 `contentScale = 1/zoomScale` 反向缩放，保证屏幕上的尺寸恒定。
 @MainActor
 final class SelectionOverlayView: UIView {
     enum Mode: Equatable {
@@ -20,6 +20,22 @@ final class SelectionOverlayView: UIView {
         case image(quad: [CGPoint])
         case compositeTransform(CGRect)
         case cropping(quad: [CGPoint])
+
+        /// 同一形态内的几何变化（拖拽中）只重排不重建，避免打断进行中的手势。
+        var shapeTag: Int {
+            switch self {
+            case .none: return 0
+            case .composite: return 1
+            case .image: return 2
+            case .compositeTransform: return 3
+            case .cropping: return 4
+            }
+        }
+
+        var isSingleImage: Bool {
+            if case .image = self { return true }
+            return false
+        }
     }
 
     weak var delegate: SelectionOverlayDelegate?
@@ -34,7 +50,6 @@ final class SelectionOverlayView: UIView {
                 lassoPoints.removeAll()
                 lassoLayer.path = nil
             }
-            // 套索模式需要独占触摸
             isUserInteractionEnabled = true
         }
     }
@@ -43,8 +58,10 @@ final class SelectionOverlayView: UIView {
     private let marqueeLayer = CAShapeLayer()
     private let lassoLayer = CAShapeLayer()
     private var handleViews: [SelectionHandleView] = []
-    private var menuView: SelectionMenuView?
     private var lassoPoints: [CGPoint] = []
+    private lazy var editMenu = UIEditMenuInteraction(delegate: self)
+    private var menuActions: [SelectionAction] = []
+    private var lastPresentedTag: Int = -1
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -62,6 +79,8 @@ final class SelectionOverlayView: UIView {
         lassoLayer.lineWidth = 1.5
         lassoLayer.lineJoin = .round
         layer.addSublayer(lassoLayer)
+
+        addInteraction(editMenu)
     }
 
     required init?(coder: NSCoder) {
@@ -85,12 +104,12 @@ final class SelectionOverlayView: UIView {
 
     // MARK: - 状态更新
 
+    /// 形态或菜单集合发生变化：重建手柄与菜单。
     func update(mode: Mode) {
         self.mode = mode
         handleViews.forEach { $0.removeFromSuperview() }
         handleViews = []
-        menuView?.removeFromSuperview()
-        menuView = nil
+        menuActions = menuActions(for: mode)
 
         switch mode {
         case .none:
@@ -105,17 +124,18 @@ final class SelectionOverlayView: UIView {
                 addSubview(handle)
                 handleViews.append(handle)
             }
-            let actions = menuActions(for: mode)
-            if !actions.isEmpty {
-                let menu = SelectionMenuView(actions: actions)
-                menu.onSelect = { [weak self] action in
-                    guard let self else { return }
-                    self.delegate?.selectionOverlay(self, didSelect: action)
-                }
-                addSubview(menu)
-                menuView = menu
-            }
         }
+        refreshLayout()
+        syncEditMenu(force: true)
+    }
+
+    /// 仅几何变化（拖拽过程中）：不重建手柄，只重排 —— 否则进行中的手势会被立刻打断。
+    func updateGeometry(_ mode: Mode) {
+        guard mode.shapeTag == self.mode.shapeTag else {
+            update(mode: mode)
+            return
+        }
+        self.mode = mode
         refreshLayout()
     }
 
@@ -133,18 +153,56 @@ final class SelectionOverlayView: UIView {
             marqueeLayer.path = CanvasGeometry.path(points: quad)
         }
 
+        let layout = handleLayout()
         for handle in handleViews {
-            guard let position = handleLayout()[handle.kind] else { continue }
+            guard let position = layout[handle.kind] else { continue }
             handle.transform = .identity
             handle.bounds = CGRect(origin: .zero, size: handle.baseSize)
             handle.center = position
             handle.transform = CGAffineTransform(scaleX: scale, y: scale)
         }
+        syncEditMenu(force: false)
+    }
 
-        if let menu = menuView, let anchor = anchorPoint(scale: scale) {
-            menu.transform = .identity
-            menu.center = anchor
-            menu.transform = CGAffineTransform(scaleX: scale, y: scale)
+    // MARK: - iOS 原生菜单
+
+    private func syncEditMenu(force: Bool) {
+        guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else {
+            if lastPresentedTag != -1 {
+                lastPresentedTag = -1
+                editMenu.dismissEditMenu(animated: true)
+            }
+            return
+        }
+        let tag = mode.shapeTag
+        guard force || lastPresentedTag != tag else { return }
+        lastPresentedTag = tag
+        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: anchor)
+
+        if force {
+            // 形态切换（例如“裁剪”进入二级状态）时旧菜单仍在退场动画中，
+            // 立即重新呈现会被系统忽略，因此先收起、再等一拍后呈现。
+            editMenu.dismissEditMenu(animated: false)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(160))
+                guard let self, self.lastPresentedTag == tag else { return }
+                self.editMenu.presentEditMenu(with: configuration)
+            }
+        } else {
+            editMenu.presentEditMenu(with: configuration)
+        }
+    }
+
+    private func menuAnchorPoint() -> CGPoint? {
+        let scale = max(0.05, contentScale)
+        switch mode {
+        case .none:
+            return nil
+        case .composite(let rect), .compositeTransform(let rect):
+            return CGPoint(x: rect.midX, y: rect.minY - 12 * scale)
+        case .image(let quad), .cropping(let quad):
+            guard let top = quad.min(by: { $0.y < $1.y }) else { return nil }
+            return CGPoint(x: top.x, y: top.y - 12 * scale)
         }
     }
 
@@ -152,9 +210,9 @@ final class SelectionOverlayView: UIView {
 
     private func baseSize(for kind: SelectionHandleKind) -> CGSize {
         switch kind {
-        case .imageCorner, .groupCorner: return CGSize(width: 15, height: 15)
-        case .imageEdge: return CGSize(width: 18, height: 9)
-        case .imageRotate, .groupRotate: return CGSize(width: 26, height: 26)
+        case .imageCorner, .groupCorner: return CGSize(width: 16, height: 16)
+        case .imageEdge: return CGSize(width: 20, height: 10)
+        case .imageRotate, .groupRotate: return CGSize(width: 28, height: 28)
         }
     }
 
@@ -202,39 +260,18 @@ final class SelectionOverlayView: UIView {
         return CGPoint(x: top.x + dx / length * offset, y: top.y + dy / length * offset)
     }
 
-    private func anchorPoint(scale: CGFloat) -> CGPoint? {
-        switch mode {
-        case .none:
-            return nil
-        case .composite(let rect), .compositeTransform(let rect):
-            return CGPoint(x: rect.midX, y: rect.minY - (menuView?.bounds.height ?? 40) / 2 * scale - 14 * scale)
-        case .image(let quad), .cropping(let quad):
-            guard let top = quad.min(by: { $0.y < $1.y }) else { return nil }
-            return CGPoint(x: top.x, y: top.y - (menuView?.bounds.height ?? 40) / 2 * scale - 16 * scale)
-        }
-    }
-
-    private func menuActions(for mode: Mode) -> [SelectionMenuAction] {
+    private func menuActions(for mode: Mode) -> [SelectionAction] {
         switch mode {
         case .none:
             return []
         case .composite:
-            return [SelectionMenuAction(action: .copy, title: "复制"),
-                    SelectionMenuAction(action: .cut, title: "剪切"),
-                    SelectionMenuAction(action: .delete, title: "删除"),
-                    SelectionMenuAction(action: .transform, title: "缩放变形")]
+            return [.copy, .cut, .delete, .transform]
         case .compositeTransform:
-            return [SelectionMenuAction(action: .finishTransform, title: "完成变形")]
+            return [.finishTransform]
         case .image:
-            return [SelectionMenuAction(action: .copy, title: "拷贝"),
-                    SelectionMenuAction(action: .crop, title: "裁剪"),
-                    SelectionMenuAction(action: .replace, title: "替换"),
-                    SelectionMenuAction(action: .bringToFront, title: "置顶"),
-                    SelectionMenuAction(action: .sendToBack, title: "置底"),
-                    SelectionMenuAction(action: .delete, title: "删除")]
+            return [.copy, .crop, .replace, .bringToFront, .sendToBack, .delete]
         case .cropping:
-            return [SelectionMenuAction(action: .finishCrop, title: "完成裁剪"),
-                    SelectionMenuAction(action: .cancelCrop, title: "取消")]
+            return [.finishCrop, .cancelCrop]
         }
     }
 
@@ -288,6 +325,37 @@ final class SelectionOverlayView: UIView {
     private func updateLassoLayer() {
         lassoLayer.lineWidth = 1.5 * max(0.05, contentScale)
         lassoLayer.path = CanvasGeometry.path(points: lassoPoints)
+    }
+}
+
+// MARK: - 原生菜单数据源
+
+extension SelectionOverlayView: UIEditMenuInteractionDelegate {
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                             menuFor configuration: UIEditMenuConfiguration,
+                             suggestedActions: [UIMenuElement]) -> UIMenu? {
+        guard !menuActions.isEmpty else { return nil }
+        let single = mode.isSingleImage
+        let children = menuActions.map { action -> UIAction in
+            UIAction(title: action.title(singleImage: single),
+                     image: UIImage(systemName: action.symbol)) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.selectionOverlay(self, didSelect: action)
+            }
+        }
+        return UIMenu(title: "", children: children)
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                             targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        switch mode {
+        case .composite(let rect), .compositeTransform(let rect):
+            return rect
+        case .image(let quad), .cropping(let quad):
+            return CanvasGeometry.boundingBox(quad)
+        case .none:
+            return .zero
+        }
     }
 }
 

@@ -3,7 +3,18 @@ import UIKit
 
 /// 统一选区：状态机、跨图层变换、剪贴板与图层顺序。
 extension CompositeCanvasContainerView: SelectionOverlayDelegate {
+    enum CropHandle {
+        case corner(Int)   // 0 TL · 1 TR · 2 BR · 3 BL
+        case edge(Int)     // 0 上 · 1 右 · 2 下 · 3 左
+    }
+
     // MARK: - 选区构建
+
+    var effectiveImageID: UUID? {
+        selectedImageIDs.first ?? croppingImageID
+    }
+
+    var isCropping: Bool { croppingImageID != nil }
 
     func selectImage(id: UUID, additive: Bool) {
         guard entity(for: id) != nil else { return }
@@ -72,6 +83,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         selectedStrokes = []
         selectedImageIDs = []
         isGroupTransforming = false
+        isHandleDragging = false
         croppingImageID = nil
         cropBase = nil
         gestureBaseTransform = nil
@@ -96,24 +108,30 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         return result.isNull ? .zero : result
     }
 
-    func refreshSelectionOverlay() {
-        let mode: SelectionOverlayView.Mode
+    private func overlayMode() -> SelectionOverlayView.Mode {
         switch selectionKind {
         case .none:
-            mode = .none
+            return .none
         case .composite:
-            mode = .composite(selectionBounds())
+            return .composite(selectionBounds())
         case .compositeTransform:
-            mode = .compositeTransform(selectionBounds())
+            return .compositeTransform(selectionBounds())
         case .image(let id):
-            mode = .image(quad: entity(for: id)?.worldQuad ?? [])
+            return .image(quad: entity(for: id)?.worldQuad ?? [])
         case .cropping(let id):
-            mode = .cropping(quad: entity(for: id)?.worldQuad ?? [])
+            return .cropping(quad: entity(for: id)?.worldQuad ?? [])
         }
-        if selectionOverlay.mode == mode {
-            selectionOverlay.refreshLayout()
-        } else {
+    }
+
+    func refreshSelectionOverlay() {
+        let mode = overlayMode()
+        if isHandleDragging {
+            // 拖拽过程中只更新几何，绝不重建手柄 —— 否则进行中的手势会被立即打断。
+            selectionOverlay.updateGeometry(mode)
+        } else if selectionOverlay.mode != mode {
             selectionOverlay.update(mode: mode)
+        } else {
+            selectionOverlay.refreshLayout()
         }
     }
 
@@ -152,30 +170,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     /// 把 delta（世界坐标）烧进浮动笔迹，并同步缩放笔迹线宽。
     func bakeStrokes(delta: CGAffineTransform) {
         guard !selectedStrokes.isEmpty else { return }
-        let uniform = max(0.01, sqrt(abs(delta.a * delta.d - delta.b * delta.c)))
-        var updated: [PKStroke] = []
-        updated.reserveCapacity(selectedStrokes.count)
-        for stroke in selectedStrokes {
-            let count = stroke.path.count
-            guard count > 0 else { continue }
-            var points: [PKStrokePoint] = []
-            points.reserveCapacity(count)
-            for index in 0..<count {
-                let point = stroke.path[index]
-                let location = point.location.applying(stroke.transform).applying(delta)
-                points.append(PKStrokePoint(location: location,
-                                            timeOffset: point.timeOffset,
-                                            size: CGSize(width: point.size.width * uniform,
-                                                         height: point.size.height * uniform),
-                                            opacity: point.opacity,
-                                            force: point.force,
-                                            azimuth: point.azimuth,
-                                            altitude: point.altitude))
-            }
-            let path = PKStrokePath(controlPoints: points, creationDate: stroke.path.creationDate)
-            updated.append(PKStroke(ink: stroke.ink, path: path, transform: .identity, mask: stroke.mask))
-        }
-        selectedStrokes = updated
+        selectedStrokes = transformStrokes(selectedStrokes, by: delta)
         showFloatingPreview()
     }
 
@@ -213,6 +208,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                           state: UIGestureRecognizer.State) {
         switch state {
         case .began:
+            isHandleDragging = true
             beginHandleGesture(kind, point: point)
         case .changed:
             updateHandleGesture(kind, point: point)
@@ -225,24 +221,27 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     private func beginHandleGesture(_ kind: SelectionHandleKind, point: CGPoint) {
         gestureBasePoint = point
+
         switch kind {
         case .imageCorner, .imageEdge, .imageRotate:
-            guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
+            guard let id = effectiveImageID, let entity = entity(for: id) else { return }
             gestureBaseTransform = entity.worldTransform
             if case .imageEdge = kind {
+                // 边手柄 = 直接进入裁剪
                 croppingImageID = id
                 cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
+            } else if isCropping {
+                cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
+            } else {
+                cropBase = nil
             }
+
         case .groupCorner, .groupRotate:
             gestureBaseTransform = .identity
             groupBaseBounds = selectionBounds()
             groupBaseTransforms = imageViews.reduce(into: [:]) { partial, view in
                 if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }
             }
-        }
-        if case .imageCorner = kind {
-            cropBase = nil
-            isGroupTransforming = false
         }
         // 变换前的状态必须先入栈，保证缩放/旋转/裁剪可撤销。
         pushHistory()
@@ -251,9 +250,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     private func updateHandleGesture(_ kind: SelectionHandleKind, point: CGPoint) {
         switch kind {
         case .imageCorner(let index):
-            applyImageCornerScale(index: index, point: point)
+            if isCropping {
+                applyCrop(.corner(index), point: point)
+            } else {
+                applyImageCornerScale(index: index, point: point)
+            }
         case .imageEdge(let index):
-            applyCrop(edge: index, point: point)
+            applyCrop(.edge(index), point: point)
         case .imageRotate:
             applyImageRotation(point: point)
         case .groupCorner(let index):
@@ -264,11 +267,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func endHandleGesture(_ kind: SelectionHandleKind) {
+        isHandleDragging = false
         switch kind {
         case .imageCorner, .imageRotate:
             isGroupTransforming = false
+            cropBase = nil
         case .imageEdge:
-            croppingImageID = nil
+            // 保持裁剪态，等待用户点“完成裁剪”；下次手势会重新采集基准。
             cropBase = nil
         case .groupCorner, .groupRotate:
             if let delta = groupAccumulatedDelta, delta != .identity {
@@ -286,7 +291,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     // MARK: - 单图变换
 
     private func applyImageCornerScale(index: Int, point: CGPoint) {
-        guard let id = selectedImageIDs.first,
+        guard let id = effectiveImageID,
               let entity = entity(for: id),
               let base = gestureBaseTransform else { return }
         let baseInverse = base.inverted()
@@ -306,7 +311,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         let hasY = abs(vectorY) > 1
         var scaleX: CGFloat = hasX ? max(0.05, (pointLocal.x - anchorLocal.x) / vectorX) : 1
         var scaleY: CGFloat = hasY ? max(0.05, (pointLocal.y - anchorLocal.y) / vectorY) : 1
-        // 四角手柄强制等比 (spec: 拖拽四角圆点默认锁定宽高比)
+        // 四角手柄强制等比（spec：拖拽四角圆点默认锁定宽高比）
         if hasX && hasY {
             let uniform = abs(vectorX) >= abs(vectorY) ? scaleX : scaleY
             scaleX = uniform
@@ -324,7 +329,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func applyImageRotation(point: CGPoint) {
-        guard let id = selectedImageIDs.first,
+        guard let id = effectiveImageID,
               let entity = entity(for: id),
               let base = gestureBaseTransform else { return }
         let center = base.applied(to: CGPoint(x: entity.visibleSize.width / 2, y: entity.visibleSize.height / 2))
@@ -343,10 +348,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     // MARK: - 无损裁剪（视窗）拖拽
 
-    private func applyCrop(edge index: Int, point: CGPoint) {
-        guard let id = croppingImageID ?? selectedImageIDs.first,
-              let entity = entity(for: id),
-              let base = cropBase else { return }
+    private func applyCrop(_ handle: CropHandle, point: CGPoint) {
+        guard let id = effectiveImageID, let entity = entity(for: id) else { return }
+        let base = cropBase ?? (entity.cropRect, entity.worldTransform, entity.naturalSize)
         let baseInverse = base.transform.inverted()
         let pointLocal = point.applying(baseInverse)
         // 当前图层局部空间 → 原图像像素空间
@@ -358,20 +362,38 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         var minY = base.crop.minY * base.natural.height
         var maxX = base.crop.maxX * base.natural.width
         var maxY = base.crop.maxY * base.natural.height
-        let minimumSize: CGFloat = 24
+        let minimumSize: CGFloat = 28
 
-        switch index {
-        case 0: minY = min(max(0, original.y), maxY - minimumSize)
-        case 1: maxX = max(min(base.natural.width, original.x), minX + minimumSize)
-        case 2: maxY = max(min(base.natural.height, original.y), minY + minimumSize)
-        case 3: minX = min(max(0, original.x), maxX - minimumSize)
-        default: break
+        switch handle {
+        case .corner(let index):
+            switch index {
+            case 0:
+                minX = min(max(0, original.x), maxX - minimumSize)
+                minY = min(max(0, original.y), maxY - minimumSize)
+            case 1:
+                maxX = max(min(base.natural.width, original.x), minX + minimumSize)
+                minY = min(max(0, original.y), maxY - minimumSize)
+            case 2:
+                maxX = max(min(base.natural.width, original.x), minX + minimumSize)
+                maxY = max(min(base.natural.height, original.y), minY + minimumSize)
+            default:
+                minX = min(max(0, original.x), maxX - minimumSize)
+                maxY = max(min(base.natural.height, original.y), minY + minimumSize)
+            }
+        case .edge(let index):
+            switch index {
+            case 0: minY = min(max(0, original.y), maxY - minimumSize)
+            case 1: maxX = max(min(base.natural.width, original.x), minX + minimumSize)
+            case 2: maxY = max(min(base.natural.height, original.y), minY + minimumSize)
+            default: minX = min(max(0, original.x), maxX - minimumSize)
+            }
         }
 
         let newCrop = CGRect(x: minX / base.natural.width,
                              y: minY / base.natural.height,
                              width: max(0.02, (maxX - minX) / base.natural.width),
                              height: max(0.02, (maxY - minY) / base.natural.height))
+        // 保持可见内容就地不动：先平移回原图坐标系，再套用基准矩阵。
         let translation = CGAffineTransform(translationX: base.natural.width * (newCrop.origin.x - base.crop.origin.x),
                                             y: base.natural.height * (newCrop.origin.y - base.crop.origin.y))
         entity.update(cropRect: newCrop, worldTransform: translation.concatenating(base.transform))
@@ -423,14 +445,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func applyGroupRotation(point: CGPoint) {
-        let baseBounds = groupBaseBounds
-        guard !baseBounds.isNull else { return }
-        let center = CGPoint(x: baseBounds.midX, y: baseBounds.midY)
+        let base = groupBaseBounds
+        guard !base.isNull else { return }
+        let center = CGPoint(x: base.midX, y: base.midY)
         let startAngle = atan2(gestureBasePoint.y - center.y, gestureBasePoint.x - center.x)
         let currentAngle = atan2(point.y - center.y, point.x - center.x)
         let snapped = CanvasGeometry.snappedAngle(currentAngle - startAngle)
-        let delta = CGAffineTransform.worldRotation(center: center, angle: snapped.angle)
-        applyGroupDelta(delta)
+        applyGroupDelta(CGAffineTransform.worldRotation(center: center, angle: snapped.angle))
     }
 
     private func applyGroupDelta(_ delta: CGAffineTransform) {
@@ -539,7 +560,6 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         }
 
         var newIDs: [UUID] = []
-        var zIndex = (imageViews.map(\.zIndex).max() ?? -1) + 1
         for item in clipboard.items {
             let copy = CanvasImageItem(id: UUID(),
                                        fileName: item.fileName,
@@ -547,11 +567,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                                        worldTransform: delta.concatenating(item.worldTransform),
                                        cropRect: item.cropRect,
                                        naturalSize: item.naturalSize,
-                                       zIndex: zIndex)
-            zIndex += 1
+                                       zIndex: nextZIndex(inFront: item.isInFront))
             let entity = makeEntity(copy)
-            imageContainerView.addSubview(entity)
-            imageViews.append(entity)
+            place(entity)
             newIDs.append(copy.id)
         }
         selectedImageIDs = newIDs
@@ -565,37 +583,50 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         return !clipboard.strokes.isEmpty || !clipboard.items.isEmpty
     }
 
-    // MARK: - 图层顺序
+    // MARK: - 图层顺序（含"置于笔迹之上"）
 
     func bringSelectionToFront() {
-        guard let id = selectedImageIDs.first else { return }
+        guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
         pushHistory()
-        if let entity = entity(for: id) {
-            imageViews.removeAll { $0.itemID == id }
-            imageViews.append(entity)
-            imageContainerView.bringSubviewToFront(entity)
-        }
+        entity.zIndex = nextZIndex(inFront: true)
+        place(entity)
         normalizeZOrder()
         notifySelection()
         onContentChange?()
     }
 
     func sendSelectionToBack() {
-        guard let id = selectedImageIDs.first else { return }
+        guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
         pushHistory()
-        if let entity = entity(for: id) {
-            imageViews.removeAll { $0.itemID == id }
-            imageViews.insert(entity, at: 0)
-            imageContainerView.sendSubviewToBack(entity)
-        }
+        let minBack = imageViews.filter { !$0.canvasItem.isInFront }.map(\.zIndex).min() ?? 0
+        entity.zIndex = minBack - 1
+        place(entity)
         normalizeZOrder()
         notifySelection()
         onContentChange?()
     }
 
+    /// 同一图层内的下一个 zIndex。
+    func nextZIndex(inFront: Bool) -> Int {
+        if inFront {
+            let maxFront = imageViews.filter(\.canvasItem.isInFront).map(\.zIndex).max()
+            return max(maxFront.map { $0 + 1 } ?? CanvasLayers.frontBase, CanvasLayers.frontBase)
+        }
+        let maxBack = imageViews.filter { !$0.canvasItem.isInFront }.map(\.zIndex).max() ?? -1
+        return maxBack + 1
+    }
+
+    /// 归一化：后层 0..n、前层 frontBase..frontBase+m，并按序重排子视图堆叠。
     func normalizeZOrder() {
-        for (index, entity) in imageViews.enumerated() {
+        let back = imageViews.filter { !$0.canvasItem.isInFront }.sorted { $0.zIndex < $1.zIndex }
+        let front = imageViews.filter(\.canvasItem.isInFront).sorted { $0.zIndex < $1.zIndex }
+        for (index, entity) in back.enumerated() {
             entity.zIndex = index
+            imageContainerView.addSubview(entity)
+        }
+        for (index, entity) in front.enumerated() {
+            entity.zIndex = CanvasLayers.frontBase + index
+            imageFrontContainerView.addSubview(entity)
         }
     }
 }

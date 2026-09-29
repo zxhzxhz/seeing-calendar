@@ -7,7 +7,7 @@ struct EditorRequest: Identifiable {
     var id: String { "\(day.key)-\(pageIndex)" }
 }
 
-/// 主界面：顶栏导航 + 1:1 月历矩阵；竖屏附加动态扩展区。
+/// 主界面：顶栏导航 + 1:1 月历矩阵（左右滑动翻月）；竖屏附加动态扩展区。
 struct RootView: View {
     @Environment(\.modelContext) private var context
 
@@ -29,6 +29,10 @@ struct RootView: View {
     @State private var showBackup = false
     @State private var showRestoreDialog = false
     @State private var toast: String?
+
+    // 翻月手势
+    @State private var monthDragOffset: CGFloat = 0
+    @State private var isMonthDragging = false
 
     private var repository: PageRepository { PageRepository(context: context) }
 
@@ -59,7 +63,7 @@ struct RootView: View {
                 headerBar
                 Divider()
                 if isPortrait {
-                    portraitLayout(width: proxy.size.width, height: proxy.size.height)
+                    portraitLayout(width: proxy.size.width)
                 } else {
                     landscapeLayout(width: proxy.size.width, height: proxy.size.height)
                 }
@@ -73,7 +77,8 @@ struct RootView: View {
         .onOpenURL { url in
             Task { await handleIncoming(url: url) }
         }
-        .sheet(item: $editorRequest) { request in
+        // 画布编辑器默认整屏打开（这是创作态，不是辅助卡片）
+        .fullScreenCover(item: $editorRequest) { request in
             DayEditorView(day: request.day,
                           workspace: workspace ?? request.day.workspace ?? repository.ensureDefaultWorkspace(),
                           context: context,
@@ -106,37 +111,114 @@ struct RootView: View {
 
     // MARK: - 布局
 
-    private func portraitLayout(width: CGFloat, height: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            monthGrid(availableSize: CGSize(width: width - 24, height: 1_000_000))
-                .padding(.vertical, 10)
-            Divider()
-            ContextDrawerView(date: selectedDate,
-                              record: selectedRecord,
-                              events: eventStore.events(on: selectedDate),
-                              onOpenPage: { pageIndex in openDay(selectedDate, pageIndex: pageIndex) },
-                              onNoteCommit: { text in
-                                  guard let record = selectedRecord ?? repository.day(for: selectedDate, workspace: workspace ?? repository.ensureDefaultWorkspace(), create: true) else { return }
-                                  repository.updateNote(text, for: record)
-                              })
-                .frame(maxHeight: .infinity, alignment: .top)
+    private func portraitLayout(width: CGFloat) -> some View {
+        ScrollView(.vertical) {
+            VStack(spacing: 0) {
+                monthPager(availableSize: CGSize(width: width - 24, height: 1_000_000),
+                           containerWidth: width)
+                    .padding(.vertical, 10)
+                Divider()
+                ContextDrawerView(date: selectedDate,
+                                  record: selectedRecord,
+                                  events: eventStore.events(on: selectedDate),
+                                  onOpenPage: { pageIndex in openDay(selectedDate, pageIndex: pageIndex) },
+                                  onNoteCommit: { text in
+                                      let target = workspace ?? repository.ensureDefaultWorkspace()
+                                      guard let record = selectedRecord ?? repository.day(for: selectedDate, workspace: target, create: true) else { return }
+                                      repository.updateNote(text, for: record)
+                                  })
+            }
         }
+        .scrollDismissesKeyboard(.interactively)
+        .scrollIndicators(.hidden)
     }
 
     private func landscapeLayout(width: CGFloat, height: CGFloat) -> some View {
-        monthGrid(availableSize: CGSize(width: width - 28, height: height - 110))
+        monthPager(availableSize: CGSize(width: width - 28, height: height - 120),
+                   containerWidth: width)
             .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    private func monthGrid(availableSize: CGSize) -> some View {
+    // MARK: - 月历 + 左右滑动翻月
+
+    private func monthPager(availableSize: CGSize, containerWidth: CGFloat) -> some View {
+        let cell = MonthGridView.cellWidth(availableSize: availableSize)
+        let height = MonthGridView.gridHeight(cellWidth: cell)
+        return ZStack {
+            if isMonthDragging {
+                HStack(spacing: 0) {
+                    if monthDragOffset > 0 {
+                        page(for: CalendarUtils.addMonths(-1, to: month), availableSize: availableSize, width: containerWidth)
+                    }
+                    page(for: month, availableSize: availableSize, width: containerWidth)
+                    if monthDragOffset < 0 {
+                        page(for: CalendarUtils.addMonths(1, to: month), availableSize: availableSize, width: containerWidth)
+                    }
+                }
+                .offset(x: monthDragOffset > 0 ? -containerWidth + monthDragOffset : monthDragOffset)
+            } else {
+                page(for: month, availableSize: availableSize, width: containerWidth)
+            }
+        }
+        .frame(width: containerWidth, height: height, alignment: .top)
+        .clipped()
+        .contentShape(Rectangle())
+        .simultaneousGesture(monthSwipe(containerWidth: containerWidth))
+    }
+
+    private func page(for target: Date, availableSize: CGSize, width: CGFloat) -> some View {
+        monthGrid(for: target, availableSize: availableSize)
+            .frame(width: width)
+    }
+
+    private func monthSwipe(containerWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > abs(dy) else { return }   // 只接管横向滑动
+                if !isMonthDragging { isMonthDragging = true }
+                monthDragOffset = dx
+            }
+            .onEnded { value in
+                guard isMonthDragging else { return }
+                let projected = value.predictedEndTranslation.width
+                let threshold = containerWidth * 0.25
+                if monthDragOffset > threshold || projected > containerWidth * 0.55 {
+                    withAnimation(.easeOut(duration: 0.26)) {
+                        monthDragOffset = containerWidth
+                    } completion: {
+                        month = CalendarUtils.addMonths(-1, to: month)
+                        monthDragOffset = 0
+                        isMonthDragging = false
+                    }
+                } else if monthDragOffset < -threshold || projected < -containerWidth * 0.55 {
+                    withAnimation(.easeOut(duration: 0.26)) {
+                        monthDragOffset = -containerWidth
+                    } completion: {
+                        month = CalendarUtils.addMonths(1, to: month)
+                        monthDragOffset = 0
+                        isMonthDragging = false
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        monthDragOffset = 0
+                    } completion: {
+                        isMonthDragging = false
+                    }
+                }
+            }
+    }
+
+    private func monthGrid(for target: Date, availableSize: CGSize) -> some View {
         var eventsByDay: [String: [CalendarEvent]] = [:]
-        for date in CalendarUtils.gridDates(forMonthContaining: month) {
+        for date in CalendarUtils.gridDates(forMonthContaining: target) {
             let key = CalendarUtils.key(for: date)
             let events = eventStore.events(onDayKey: key)
             if !events.isEmpty { eventsByDay[key] = events }
         }
-        return MonthGridView(month: month,
+        return MonthGridView(month: target,
                              selectedDate: selectedDate,
                              records: dayRecords,
                              eventsByDay: eventsByDay,
@@ -265,7 +347,9 @@ struct RootView: View {
     // MARK: - 行为
 
     private func shiftMonth(_ delta: Int) {
-        month = CalendarUtils.addMonths(delta, to: month)
+        withAnimation(.easeInOut(duration: 0.22)) {
+            month = CalendarUtils.addMonths(delta, to: month)
+        }
     }
 
     private func openDay(_ date: Date, pageIndex: Int) {
@@ -283,9 +367,7 @@ struct RootView: View {
         if selectedWorkspaceUUID == nil {
             selectedWorkspaceUUID = workspaces.first?.uuid ?? fallback.uuid
         }
-        if subscriptions.isEmpty {
-            // 无订阅源时不发请求，保持零网络足迹。
-        } else {
+        if !subscriptions.isEmpty {
             await eventStore.refresh(subscriptions: subscriptions)
         }
         await performAutoSnapshotIfNeeded()

@@ -18,6 +18,7 @@ final class ImageEntityView: UIImageView {
 
     private let sourceImage: UIImage
     private var gestureBase: CGAffineTransform?
+    private var gestureStartPoint: CGPoint?
 
     init(item: CanvasImageItem) {
         self.itemID = item.id
@@ -138,16 +139,21 @@ final class ImageEntityView: UIImageView {
         switch gesture.state {
         case .began:
             gestureBase = worldTransform
+            gestureStartPoint = gesture.location(in: superview)
             onSelect?(self)
             onBeginMove?(self)
         case .changed:
-            guard let base = gestureBase, let parent = superview else { return }
-            let delta = gesture.translation(in: parent)
+            guard let base = gestureBase, let parent = superview, let start = gestureStartPoint else { return }
+            // 注意：此处必须使用 location 差值而非 translation(in:)，
+            // 否则在缩放过的祖先坐标系（画布 zoomScale ≠ 1）下，手指位移与贴图位移不等距。
+            let current = gesture.location(in: parent)
+            let delta = CGPoint(x: current.x - start.x, y: current.y - start.y)
             worldTransform = CGAffineTransform.worldTranslation(delta).concatenating(base)
             applyWorldTransform()
             onTransformChanged?(self)
         case .ended, .cancelled, .failed:
             gestureBase = nil
+            gestureStartPoint = nil
             onTransformChanged?(self)
         default:
             break

@@ -52,6 +52,7 @@ final class EditorModel {
     private(set) var canUndo = false
     private(set) var canRedo = false
     var hasClipboard = false
+    var isCanvasExpanded = false
     var isReplacingImage = false
     var replaceTargetID: UUID?
     var note: String
@@ -110,6 +111,13 @@ final class EditorModel {
             guard let self else { return }
             self.replaceTargetID = id
             self.isReplacingImage = true
+        }
+        host.onZoomChange = { [weak self] scale, fit in
+            guard let self else { return }
+            let expanded = fit > 0 && scale > fit * 1.05
+            if self.isCanvasExpanded != expanded {
+                self.isCanvasExpanded = expanded
+            }
         }
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         host.canvas.isLassoActive = isLassoActive
@@ -296,6 +304,24 @@ final class EditorModel {
 
     func zoomToFit() {
         canvasHost?.zoomToFit(animated: true)
+    }
+
+    /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥。
+    func select(tool: CanvasTool) {
+        activeTool = tool
+        if isLassoActive {
+            isLassoActive = false
+        }
+    }
+
+    /// 套索 —— 与笔墨工具互斥。
+    func toggleLasso() {
+        isLassoActive.toggle()
+    }
+
+    /// 「最大化 / 缩小」画布视口。
+    func toggleCanvasZoom() {
+        canvasHost?.toggleExpanded(animated: true)
     }
 
     func updateNote(_ text: String) {

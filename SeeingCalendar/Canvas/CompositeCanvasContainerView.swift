@@ -1,15 +1,18 @@
 import PencilKit
 import UIKit
 
-/// 复合画布容器（Layer 1~4 的宿主）。
+/// 复合画布容器（Layer 1~5 的宿主）。
 /// 核心职责：① 层级装配；② 触碰第一纳秒的贴图命中截流；③ 历史栈；④ 选区状态机入口。
 @MainActor
 final class CompositeCanvasContainerView: UIView {
     static let canvasSize = CGSize(width: 1400, height: 1400)
 
     let paperView = PaperBackgroundView()
+    /// 笔迹之下的贴图层。
     let imageContainerView = UIView()
     let canvasView = PKCanvasView()
+    /// 笔迹之上的贴图层（“置顶”后进入此层）。
+    let imageFrontContainerView = UIView()
     let selectionContentContainer = UIView()
     let selectionOverlay = SelectionOverlayView()
 
@@ -18,7 +21,7 @@ final class CompositeCanvasContainerView: UIView {
     var onHistoryChange: ((Bool, Bool) -> Void)?
     var onRequestImageReplace: ((UUID) -> Void)?
 
-    var imageViews: [ImageEntityView] = []
+    private(set) var imageViews: [ImageEntityView] = []
 
     // 历史栈
     private var history: [CanvasSnapshot] = []
@@ -32,6 +35,7 @@ final class CompositeCanvasContainerView: UIView {
     var selectedStrokes: [PKStroke] = []
     var selectionKind: CanvasSelectionKind = .none
     var isGroupTransforming = false
+    var isHandleDragging = false
     var croppingImageID: UUID?
     var floatingPreview: UIImageView?
     var gestureBaseTransform: CGAffineTransform?
@@ -54,6 +58,11 @@ final class CompositeCanvasContainerView: UIView {
             guard oldValue != isLassoActive else { return }
             selectionOverlay.isLassoActive = isLassoActive
             canvasView.isUserInteractionEnabled = !isLassoActive
+            if isLassoActive {
+                // 套索与笔墨互斥：进入套索即退出选区编辑态
+                commitSelection(notify: false)
+                notifySelection()
+            }
         }
     }
 
@@ -88,6 +97,9 @@ final class CompositeCanvasContainerView: UIView {
         canvasView.contentSize = Self.canvasSize
         addSubview(canvasView)
 
+        imageFrontContainerView.backgroundColor = .clear
+        addSubview(imageFrontContainerView)
+
         selectionContentContainer.backgroundColor = .clear
         selectionContentContainer.isUserInteractionEnabled = false
         addSubview(selectionContentContainer)
@@ -106,6 +118,7 @@ final class CompositeCanvasContainerView: UIView {
         paperView.frame = CGRect(origin: .zero, size: size)
         imageContainerView.frame = CGRect(origin: .zero, size: size)
         canvasView.frame = CGRect(origin: .zero, size: size)
+        imageFrontContainerView.frame = CGRect(origin: .zero, size: size)
         selectionContentContainer.frame = CGRect(origin: .zero, size: size)
         selectionOverlay.frame = CGRect(origin: .zero, size: size)
     }
@@ -119,19 +132,22 @@ final class CompositeCanvasContainerView: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
 
-        // 1. 选区覆盖层优先（手柄 / 菜单 / 套索捕获）
+        // 1. 选区覆盖层优先（手柄 / 套索捕获）
         let overlayPoint = convert(point, to: selectionOverlay)
         if selectionOverlay.point(inside: overlayPoint, with: event),
            let hit = selectionOverlay.hitTest(overlayPoint, with: event) {
             return hit
         }
 
-        // 2. 贴图命中：逆序遍历保证顶层优先，命中即短路 PKCanvasView 的绘制手势
-        for subview in imageContainerView.subviews.reversed() {
-            guard let entity = subview as? ImageEntityView, !entity.isHidden, entity.alpha > 0.01 else { continue }
-            let local = entity.convert(point, from: self)
-            if entity.bounds.contains(local) {
-                return entity
+        // 2. 贴图命中：前置层 → 后置层，逆序遍历保证顶层优先；
+        //    命中即短路 PKCanvasView 的绘制手势，从底座杜绝“选中贴图同时画出污点”。
+        for container in [imageFrontContainerView, imageContainerView] {
+            for subview in container.subviews.reversed() {
+                guard let entity = subview as? ImageEntityView, !entity.isHidden, entity.alpha > 0.01 else { continue }
+                let local = entity.convert(point, from: self)
+                if entity.bounds.contains(local) {
+                    return entity
+                }
             }
         }
 
@@ -142,12 +158,13 @@ final class CompositeCanvasContainerView: UIView {
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
         let point = gesture.location(in: self)
-        // 落在选区手柄 / 浮动菜单上：不参与“点空白取消选择”
+
+        // 落在选区手柄上：不参与“点空白取消选择”
         let overlayPoint = convert(point, to: selectionOverlay)
         if selectionOverlay.point(inside: overlayPoint, with: nil) { return }
 
         // 落在贴图上：交给贴图自身的点选逻辑
-        for entity in imageViews.reversed() where !entity.isHidden {
+        for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
             if entity.bounds.contains(entity.convert(point, from: self)) { return }
         }
         if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
@@ -192,11 +209,23 @@ final class CompositeCanvasContainerView: UIView {
     func rebuildImageViews(_ items: [CanvasImageItem]) {
         imageViews.forEach { $0.removeFromSuperview() }
         imageViews = []
-        for (index, item) in items.sorted(by: { $0.zIndex < $1.zIndex }).enumerated() {
+
+        let sorted = items.sorted { $0.zIndex < $1.zIndex }
+        let back = sorted.filter { !$0.isInFront }
+        let front = sorted.filter(\.isInFront)
+
+        for (index, item) in back.enumerated() {
             var normalized = item
             normalized.zIndex = index
             let entity = makeEntity(normalized)
             imageContainerView.addSubview(entity)
+            imageViews.append(entity)
+        }
+        for (index, item) in front.enumerated() {
+            var normalized = item
+            normalized.zIndex = CanvasLayers.frontBase + index
+            let entity = makeEntity(normalized)
+            imageFrontContainerView.addSubview(entity)
             imageViews.append(entity)
         }
     }
@@ -215,6 +244,19 @@ final class CompositeCanvasContainerView: UIView {
             self?.pushHistory()
         }
         return entity
+    }
+
+    /// 按图层归属放置视图。
+    func place(_ entity: ImageEntityView) {
+        entity.removeFromSuperview()
+        if entity.zIndex >= CanvasLayers.frontBase {
+            imageFrontContainerView.addSubview(entity)
+        } else {
+            imageContainerView.addSubview(entity)
+        }
+        if !imageViews.contains(where: { $0.itemID == entity.itemID }) {
+            imageViews.append(entity)
+        }
     }
 
     // MARK: - 历史
@@ -291,16 +333,16 @@ final class CompositeCanvasContainerView: UIView {
         let natural = CGSize(width: max(1, image.size.width * image.scale),
                              height: max(1, image.size.height * image.scale))
         let transform = Self.entranceTransform(naturalSize: natural, offset: offset)
+        let nextZ = (imageViews.filter { !$0.canvasItem.isInFront }.map(\.zIndex).max() ?? -1) + 1
         let item = CanvasImageItem(id: UUID(),
                                    fileName: fileName,
                                    image: image,
                                    worldTransform: transform,
                                    cropRect: CGRect(x: 0, y: 0, width: 1, height: 1),
                                    naturalSize: natural,
-                                   zIndex: (imageViews.map(\.zIndex).max() ?? -1) + 1)
+                                   zIndex: nextZ)
         let entity = makeEntity(item)
-        imageContainerView.addSubview(entity)
-        imageViews.append(entity)
+        place(entity)
         selectImage(id: item.id, additive: false)
         onContentChange?()
         return item.id
@@ -363,8 +405,7 @@ final class CompositeCanvasContainerView: UIView {
         entity.removeFromSuperview()
         imageViews.removeAll { $0.itemID == id }
         let replacement = makeEntity(item)
-        imageContainerView.addSubview(replacement)
-        imageViews.append(replacement)
+        place(replacement)
         selectImage(id: id, additive: false)
         onContentChange?()
     }
@@ -376,6 +417,10 @@ extension CompositeCanvasContainerView: PKCanvasViewDelegate {
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         guard !isToolSessionActive else { return }
         isToolSessionActive = true
+        // 落笔即视为退出选区编辑态（等价于“点按空白处取消选中”）。
+        if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
+            commitSelection(notify: true)
+        }
         pushHistory()
     }
 
@@ -386,6 +431,11 @@ extension CompositeCanvasContainerView: PKCanvasViewDelegate {
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !isProgrammatic else { return }
+        // 画布内容一旦变化，说明用户在用笔/橡皮 —— 等价于“点按空白处”，选区随即失效。
+        // 该路径不依赖手势共存仲裁，因此“手指书写开启”时同样可靠。
+        if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
+            commitSelection(notify: true)
+        }
         onContentChange?()
     }
 }

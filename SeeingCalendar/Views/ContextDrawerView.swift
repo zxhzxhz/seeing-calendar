@@ -1,7 +1,7 @@
-import SwiftData
 import SwiftUI
 
 /// 竖屏动态扩展区（spec 1.2）：ICS 时间轴 + 多页横向轮播 + 便签式快捷记录。
+/// 外层由 RootView 的统一滚动视图承载，本视图自身不再嵌套纵向滚动，避免键盘避让时的布局抖动。
 struct ContextDrawerView: View {
     let date: Date
     let record: DayRecord?
@@ -9,26 +9,21 @@ struct ContextDrawerView: View {
     let onOpenPage: (Int) -> Void
     let onNoteCommit: (String) -> Void
 
-    @State private var note: String = ""
     @State private var thumbnails: [UUID: UIImage] = [:]
-    @State private var loadedVersion: Int = -1
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                timeline
-                carousel
-                noteEditor
-            }
-            .padding(16)
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            timeline
+            carousel
+            noteSection
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .systemBackground))
         .task(id: ThumbnailStore.shared.version) {
             await loadThumbnails()
         }
-        .onAppear { note = record?.note ?? "" }
-        .onChange(of: record?.key) { _, _ in note = record?.note ?? "" }
     }
 
     private var header: some View {
@@ -130,27 +125,23 @@ struct ContextDrawerView: View {
         }
     }
 
-    private var noteEditor: some View {
+    private var noteSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("快捷记录", systemImage: "text.append")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
-            TextField("写点什么…", text: $note, axis: .vertical)
-                .lineLimit(2...5)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(uiColor: .secondarySystemBackground))
-                )
-                .onChange(of: note) { _, newValue in
-                    onNoteCommit(newValue)
-                }
+            QuickNoteEditor(dayKey: record?.key ?? CalendarUtils.key(for: date),
+                            initialText: record?.note ?? "",
+                            onCommit: onNoteCommit)
+                .id(record?.key ?? CalendarUtils.key(for: date))
         }
     }
 
     private func loadThumbnails() async {
-        guard let pages = record?.orderedPages else { return }
+        guard let pages = record?.orderedPages else {
+            thumbnails = [:]
+            return
+        }
         var result: [UUID: UIImage] = [:]
         for page in pages {
             if let image = await ThumbnailStore.shared.thumbnail(for: page) {
@@ -158,5 +149,54 @@ struct ContextDrawerView: View {
             }
         }
         thumbnails = result
+    }
+}
+
+/// 便签式快捷记录：本地态 + 停止输入 0.7s 后才落库。
+/// 这样键盘弹出/收起期间不会因为 SwiftData 写入引发的整树刷新而丢失第一响应者。
+private struct QuickNoteEditor: View {
+    let dayKey: String
+    let initialText: String
+    let onCommit: (String) -> Void
+
+    @State private var text: String = ""
+    @State private var commitTask: Task<Void, Never>?
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField("写点什么…", text: $text, axis: .vertical)
+            .lineLimit(2...6)
+            .focused($isFocused)
+            .textFieldStyle(.plain)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            )
+            .onAppear {
+                if text != initialText { text = initialText }
+            }
+            .onChange(of: text) { _, newValue in
+                scheduleCommit(newValue)
+            }
+            .onChange(of: isFocused) { _, focused in
+                if !focused {
+                    commitTask?.cancel()
+                    onCommit(text)
+                }
+            }
+            .onDisappear {
+                commitTask?.cancel()
+                onCommit(text)
+            }
+    }
+
+    private func scheduleCommit(_ value: String) {
+        commitTask?.cancel()
+        commitTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            onCommit(value)
+        }
     }
 }

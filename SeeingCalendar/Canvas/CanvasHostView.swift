@@ -7,6 +7,9 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
     let scrollView = UIScrollView()
     let canvas: CompositeCanvasContainerView
 
+    /// (当前缩放, 适配置缩放) —— 供 SwiftUI 层驱动“最大化 / 缩小”按钮状态。
+    var onZoomChange: ((CGFloat, CGFloat) -> Void)?
+
     private var didPerformInitialFit = false
 
     override init(frame: CGRect) {
@@ -58,6 +61,36 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         updateInsets()
         canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+        notifyZoom()
+    }
+
+    /// 恰好看清整张 1:1 画布的缩放。
+    var fitScale: CGFloat {
+        guard canvas.bounds.width > 0, canvas.bounds.height > 0,
+              bounds.width > 1, bounds.height > 1 else { return 1 }
+        return min(bounds.width / canvas.bounds.width, bounds.height / canvas.bounds.height)
+    }
+
+    var isExpanded: Bool {
+        scrollView.zoomScale > fitScale * 1.05
+    }
+
+    func notifyZoom() {
+        onZoomChange?(scrollView.zoomScale, fitScale)
+    }
+
+    /// 「最大化 / 缩小」：在“适应整页”与“放大到 100%”之间切换，点击必有可见反馈。
+    func toggleExpanded(animated: Bool = true) {
+        let fit = max(scrollView.minimumZoomScale, min(scrollView.maximumZoomScale, fitScale))
+        if scrollView.zoomScale > fit * 1.05 {
+            scrollView.setZoomScale(fit, animated: animated)
+        } else {
+            let target = min(scrollView.maximumZoomScale, max(fit * 1.02, 1.0))
+            scrollView.setZoomScale(target, animated: animated)
+        }
+        updateInsets()
+        canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+        notifyZoom()
     }
 
     func zoomToFit(animated: Bool = false) {
@@ -68,6 +101,7 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
         scrollView.setZoomScale(target, animated: animated)
         updateInsets()
         canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+        notifyZoom()
     }
 
     func zoomIn(animated: Bool = true) {
@@ -75,6 +109,7 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
         scrollView.setZoomScale(target, animated: animated)
         updateInsets()
         canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+        notifyZoom()
     }
 
     func zoomOut(animated: Bool = true) {
@@ -82,6 +117,7 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
         scrollView.setZoomScale(target, animated: animated)
         updateInsets()
         canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+        notifyZoom()
     }
 
     private func updateInsets() {

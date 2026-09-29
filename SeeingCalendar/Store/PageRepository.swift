@@ -149,25 +149,26 @@ struct PageRepository {
     }
 
     /// 全量对账：新增 / 更新 / 删除，保证数据库与画布一致。
+    /// `zIndex` 直接沿用画布给出的全局序号（含「笔迹之上」的前置层区间）。
     func saveImageItems(_ items: [CanvasImageItem], for page: DrawingPage) {
         var existing: [UUID: ImageRecord] = [:]
         for record in page.images { existing[record.uuid] = record }
 
-        for (index, item) in items.enumerated() {
+        for item in items.sorted(by: { $0.zIndex < $1.zIndex }) {
             if let record = existing.removeValue(forKey: item.id) {
                 record.fileName = item.fileName
                 record.setTransform(item.worldTransform)
                 record.setCropRect(item.cropRect)
                 record.naturalWidth = Double(item.naturalSize.width)
                 record.naturalHeight = Double(item.naturalSize.height)
-                record.zIndex = index
+                record.zIndex = item.zIndex
             } else {
                 let record = ImageRecord(uuid: item.id,
                                          fileName: item.fileName,
                                          transform: item.worldTransform,
                                          cropRect: item.cropRect,
                                          naturalSize: item.naturalSize,
-                                         zIndex: index)
+                                         zIndex: item.zIndex)
                 context.insert(record)
                 record.page = page
             }

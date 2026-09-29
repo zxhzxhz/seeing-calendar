@@ -193,14 +193,16 @@ struct DayEditorView: View {
 
             ForEach(CanvasTool.allCases) { tool in
                 Button {
-                    model.activeTool = tool
+                    model.select(tool: tool)
                 } label: {
                     Image(systemName: tool.symbol)
                         .font(.system(size: 16))
                         .frame(width: 30, height: 30)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(model.activeTool == tool ? Color.accentColor.opacity(0.18) : .clear)
+                                .fill(model.activeTool == tool && !model.isLassoActive
+                                      ? Color.accentColor.opacity(0.18)
+                                      : .clear)
                         )
                 }
                 .accessibilityLabel(tool.title)
@@ -221,7 +223,7 @@ struct DayEditorView: View {
             Divider().frame(height: 22)
 
             Button {
-                model.isLassoActive.toggle()
+                model.toggleLasso()
             } label: {
                 Image(systemName: "lasso")
                     .font(.system(size: 16))
@@ -248,13 +250,26 @@ struct DayEditorView: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                model.zoomToFit()
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 14))
+            if model.isLassoActive {
+                Text("套索")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
             }
-            .accessibilityLabel("适应画布")
+
+            Button {
+                model.toggleCanvasZoom()
+            } label: {
+                Image(systemName: model.isCanvasExpanded
+                      ? "arrow.down.right.and.arrow.up.left"
+                      : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 15))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(model.isCanvasExpanded ? Color.accentColor.opacity(0.18) : .clear)
+                    )
+            }
+            .accessibilityLabel(model.isCanvasExpanded ? "缩小画布" : "最大化画布")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
