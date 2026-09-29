@@ -65,6 +65,8 @@ final class SelectionOverlayView: UIView {
     private(set) var mode: Mode = .none
     private let marqueeLayer = CAShapeLayer()
     private let lassoLayer = CAShapeLayer()
+    /// 变换基准点标记（缩放/旋转的不动点 = 选区正中心）。
+    private let pivotLayer = CAShapeLayer()
     private var handleViews: [SelectionHandleView] = []
     private var lassoPoints: [CGPoint] = []
     private var isCapturingLasso = false
@@ -93,6 +95,11 @@ final class SelectionOverlayView: UIView {
         lassoLayer.lineWidth = 1.5
         lassoLayer.lineJoin = .round
         layer.addSublayer(lassoLayer)
+
+        pivotLayer.strokeColor = UIColor.systemBlue.cgColor
+        pivotLayer.fillColor = UIColor.clear.cgColor
+        pivotLayer.lineWidth = 1.5
+        layer.addSublayer(pivotLayer)
 
         addSubview(interiorView)
         interiorView.addGestureRecognizer(interiorPan)
@@ -212,6 +219,8 @@ final class SelectionOverlayView: UIView {
             marqueeLayer.path = CanvasGeometry.path(points: quad)
         }
 
+        updatePivotLayer(scale: scale)
+
         let layout = handleLayout()
         for handle in handleViews {
             guard let position = layout[handle.kind] else { continue }
@@ -226,6 +235,43 @@ final class SelectionOverlayView: UIView {
         interiorView.region = compositeRect ?? .null
 
         syncEditMenu(force: false)
+    }
+
+    /// 基准点：单选/复合变形都以包围盒中心为不动点，这里把它画出来（圆 + 十字）。
+    private func updatePivotLayer(scale: CGFloat) {
+        guard let center = pivotPoint() else {
+            pivotLayer.path = nil
+            return
+        }
+        let radius = 7 * scale
+        let arm = 11 * scale
+        let path = CGMutablePath()
+        path.addEllipse(in: CGRect(x: center.x - radius, y: center.y - radius,
+                                   width: radius * 2, height: radius * 2))
+        path.move(to: CGPoint(x: center.x - arm, y: center.y))
+        path.addLine(to: CGPoint(x: center.x + arm, y: center.y))
+        path.move(to: CGPoint(x: center.x, y: center.y - arm))
+        path.addLine(to: CGPoint(x: center.x, y: center.y + arm))
+        pivotLayer.path = path
+        pivotLayer.lineWidth = 1.5 * scale
+    }
+
+    /// 变换不动点。单图与复合选区的缩放/旋转都以它为中心。
+    func pivotPoint() -> CGPoint? {
+        switch mode {
+        case .none, .composite:
+            return nil
+        case .compositeTransform(let rect):
+            return CGPoint(x: rect.midX, y: rect.midY)
+        case .cropping(let quad):
+            guard quad.count == 4 else { return nil }
+            let box = CanvasGeometry.boundingBox(quad)
+            return CGPoint(x: box.midX, y: box.midY)
+        case .image(let quad):
+            guard quad.count == 4 else { return nil }
+            let box = CanvasGeometry.boundingBox(quad)
+            return CGPoint(x: box.midX, y: box.midY)
+        }
     }
 
     // MARK: - 内部拖动（仅变形态）
