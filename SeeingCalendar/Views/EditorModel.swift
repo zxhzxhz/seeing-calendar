@@ -85,6 +85,9 @@ final class EditorModel {
     var isLassoActive: Bool = false {
         didSet { syncUIKitState(of: canvasHost) }
     }
+
+    /// 打开编辑器时的全局默认手指书写值（关闭时回写，避免编辑过程中触发外层重渲染）。
+    private(set) var fingerDrawingAtLaunch: Bool = false
     private(set) var selectionKind: CanvasSelectionKind = .none
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -95,26 +98,22 @@ final class EditorModel {
     var note: String
 
     /// nil = 导航态（未选中任何工具，只平移缩放）。
-    var activeTool: CanvasTool? = .pen {
-        didSet { toolNeedsApply = true }
-    }
-    var penColorHex: String = "#1F6FB2" {
-        didSet { toolNeedsApply = true }
-    }
-    var penWidth: CGFloat = 5 {
-        didSet { toolNeedsApply = true }
-    }
-    var eraserMode: EraserMode = .wholeStroke {
-        didSet { toolNeedsApply = true }
-    }
+    /// 注意：这些属性**不依赖属性观察器**驱动工具下发 ——
+    /// 变更请走 `select(tool:)` / `updatePenColor(_:)` 等显式方法（它们会立即下发），
+    /// 或依赖 `syncUIKitState` 的幂等签名比较兜底。
+    var activeTool: CanvasTool? = .pen
+    var penColorHex: String = "#1F6FB2"
+    var penWidth: CGFloat = 5
+    var eraserMode: EraserMode = .wholeStroke
     /// 橡皮有效范围直径（画布世界坐标）；同时决定 PKEraserTool.width 与指示圈直径。
-    var eraserWidth: CGFloat = 26 {
-        didSet { toolNeedsApply = true }
-    }
+    var eraserWidth: CGFloat = 26
 
     weak var canvasHost: CanvasHostView?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    @ObservationIgnored private var toolNeedsApply = true
+    /// 已下发的工具指纹：与期望指纹不一致时才重新下发。
+    /// 之所以不用「设置-清除标志位」，是因为它依赖属性观察器能否触发；
+    /// 幂等比较无论如何都能收敛到正确状态。
+    @ObservationIgnored private var appliedToolSignature: String = ""
     @ObservationIgnored private var loadedPageUUID: UUID?
 
     init(day: DayRecord, workspace: Workspace, context: ModelContext) {
@@ -123,6 +122,7 @@ final class EditorModel {
         self.repository = PageRepository(context: context)
         self.note = day.note
         self.pages = day.orderedPages
+        self.fingerDrawingAtLaunch = false
     }
 
     var currentPage: DrawingPage? {
@@ -169,11 +169,18 @@ final class EditorModel {
         }
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         host.canvas.isLassoActive = isLassoActive
-        toolNeedsApply = true
+        appliedToolSignature = ""          // 强制首次下发
+        syncUIKitState(of: host)
         // 延后到下一轮运行循环：避免在 SwiftUI 视图更新期间修改可观察状态。
         Task { @MainActor [weak self] in
             self?.loadCurrentPage()
         }
+    }
+
+    /// 期望状态指纹：工具类型 + 颜色 + 笔宽 + 橡皮模式/大小 + 套索开关。
+    private var toolSignature: String {
+        let tool = activeTool?.rawValue ?? "none"
+        return "\(tool)|\(penColorHex)|\(penWidth)|\(eraserMode.rawValue)|\(eraserWidth)|\(isLassoActive)"
     }
 
     func syncUIKitState(of host: CanvasHostView?) {
@@ -184,10 +191,16 @@ final class EditorModel {
         if host.canvas.isLassoActive != isLassoActive {
             host.canvas.isLassoActive = isLassoActive
         }
-        if toolNeedsApply {
-            toolNeedsApply = false
+        let signature = toolSignature
+        if signature != appliedToolSignature {
+            appliedToolSignature = signature
             applyTool(on: host)
         }
+    }
+
+    /// 立即下发（不等 SwiftUI 更新回合）。
+    func applyToolImmediately() {
+        syncUIKitState(of: canvasHost)
     }
 
     private func applyTool(on host: CanvasHostView) {
@@ -413,7 +426,31 @@ final class EditorModel {
             isLassoActive = false
         }
         activeTool = (activeTool == tool) ? nil : tool
-        toolNeedsApply = true
+        applyToolImmediately()
+    }
+
+    /// 墨色
+    func updatePenColor(_ hex: String) {
+        penColorHex = hex
+        applyToolImmediately()
+    }
+
+    /// 笔宽
+    func updatePenWidth(_ width: CGFloat) {
+        penWidth = width
+        applyToolImmediately()
+    }
+
+    /// 橡皮模式（整体擦除 / 范围擦除）
+    func updateEraserMode(_ mode: EraserMode) {
+        eraserMode = mode
+        applyToolImmediately()
+    }
+
+    /// 橡皮有效范围
+    func updateEraserWidth(_ width: CGFloat) {
+        eraserWidth = width
+        applyToolImmediately()
     }
 
     /// 是否处于「无工具 / 导航」状态。

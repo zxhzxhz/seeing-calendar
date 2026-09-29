@@ -35,6 +35,9 @@ jobs:
           if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
           xcodegen --version
 
+      - name: Probe @Observable semantics
+        run: swift scripts/verify_observation_semantics.swift
+
       - name: Verify canvas transform math (real CoreGraphics)
         run: swift scripts/verify_transform_math.swift --strict   # 不变量不成立即让构建失败
 

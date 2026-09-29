@@ -59,10 +59,11 @@ struct DayEditorView: View {
             .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent(model: model) }
-            .onChange(of: model.isFingerDrawingEnabled) { _, newValue in
-                onFingerDrawingChanged(newValue)
+            .onDisappear {
+                model.finishEditing()
+                // 编辑过程中不回写全局开关（会触发外层重渲染并打断 UIKit 状态），关闭时统一回写。
+                onFingerDrawingChanged(model.isFingerDrawingEnabled)
             }
-            .onDisappear { model.finishEditing() }
         }
         .photosPicker(isPresented: photoPickerBinding(model: model), selection: $photoItem, matching: .images)
         .photosPicker(isPresented: replacementPickerBinding(model: model), selection: $replacementItem, matching: .images)
@@ -359,7 +360,7 @@ struct DayEditorView: View {
             Text("橡皮模式").font(.headline)
             ForEach(EraserMode.allCases) { mode in
                 Button {
-                    model.eraserMode = mode
+                    model.updateEraserMode(mode)
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: mode.symbol)
@@ -386,7 +387,7 @@ struct DayEditorView: View {
 
             Text("橡皮大小 \(Int(model.eraserWidth)) pt")
                 .font(.subheadline)
-            Slider(value: Binding(get: { model.eraserWidth }, set: { model.eraserWidth = $0 }),
+            Slider(value: Binding(get: { model.eraserWidth }, set: { model.updateEraserWidth($0) }),
                    in: 8...160,
                    step: 2)
                 .frame(width: 260)
@@ -404,7 +405,7 @@ struct DayEditorView: View {
             HStack(spacing: 10) {
                 ForEach(SubscriptionPalette.colors, id: \.self) { hex in
                     Button {
-                        model.penColorHex = hex
+                        model.updatePenColor(hex)
                     } label: {
                         Circle()
                             .fill(Color(hex: hex))
@@ -418,7 +419,7 @@ struct DayEditorView: View {
             }
             Text("笔宽 \(Int(model.penWidth))")
                 .font(.subheadline)
-            Slider(value: Binding(get: { model.penWidth }, set: { model.penWidth = $0 }), in: 1...28, step: 1)
+            Slider(value: Binding(get: { model.penWidth }, set: { model.updatePenWidth($0) }), in: 1...28, step: 1)
                 .frame(width: 240)
         }
         .padding(16)
