@@ -1,11 +1,31 @@
 # Changelog
 
-## [1.0.10]
+## [1.0.10] — 带 mask 的笔迹变换后消失
 
-### 待归档
+### 修复
+- **用「范围擦除」把线截断后，套索选中再变形/移动/旋转，线会消失或只剩一小截。**
+  根因（Apple 文档 + WWDC20 + 本机探针三重确认）：
+  - 范围擦除（`PKEraserTool.EraserType.bitmap`）**不删除 path 上的点**，而是给笔迹加 **mask** 来裁剪渲染
+    —— WWDC20："Masked strokes are typically created when the pixel eraser is used to erase only a
+    portion of a stroke … Masks can have holes. **Or they can cut a stroke into multiple pieces.**"
+  - `mask` 是 **pretransform** 空间的（官方文档原文），与 path 同处笔迹局部坐标系。
+  - 我此前的实现把 delta 烘焙进 path 控制点、却**原样搬运旧 mask** → 裁剪区留在旧位置，
+    与新几何错位，于是"被截断的线"被裁掉了大半甚至全部。
+  修法：`transformStrokes` 改为**只把 delta 合成到 `stroke.transform`**，path 与 mask 作为同一局部空间
+  被整体变换，天然保持一致。
+- 附带收益（同一处改动）：
+  - **O(1)** —— 不再逐点重建（长笔迹的批量变换显著变快）；
+  - **零保真损失** —— PencilKit 的点是"有损压缩存储"，重建会掉精度；
+  - **线宽随变换自然缩放** —— `renderBounds` 文档明确 transform 作用于渲染结果（含线宽），
+    本机探针实测：2x 缩放后 renderBounds 由 76×6 变为 150×10（线宽 4→8），
+    因此不再需要手工乘 `point.size`。
 
-- （填写本次变更）
+### 工程
+- 新增 `scripts/verify_pencilkit_stroke_semantics.swift`：在 macOS runner 上真实构造 `PKStroke`，
+  实测 transform 对渲染结果（含线宽）的作用。CI 现有三步校验：@Observable 探针 → PencilKit 笔迹探针 →
+  225 条变换数学断言。
 
+## [1.0.9] — 工具切换失效（更新链路被打断）
 # Changelog
 
 ## [1.0.9] — 工具切换失效（更新链路被打断）
