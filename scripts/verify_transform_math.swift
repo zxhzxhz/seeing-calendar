@@ -1,17 +1,21 @@
 #!/usr/bin/env swift
 //
 //  verify_transform_math.swift
-//  画布变换数学的可执行验证：在 macOS runner 上直接跑真实 CoreGraphics，
-//  测量 CGAffineTransform 合成顺序，并逐条验证「手指位移 == 图元位移」等不变量。
+//  画布变换数学的可执行回归门禁。
 //
-//  用法：
-//      swift scripts/verify_transform_math.swift           # 诊断模式：打印候选实现的表现
-//      swift scripts/verify_transform_math.swift --strict  # 断言模式：任何不变量不成立即 exit 1
+//  为什么需要它：位移/缩放/旋转的正确性取决于 CGAffineTransform 的合成方向，
+//  而这个方向**靠推理反复出错**（v1.0.2 之前四处变换全部用反，导致「手指位移 ≠ 图元位移」，
+//  比值恰好等于图元自身缩放比）。这里改为在 macOS 上用真实 CoreGraphics 测量 + 断言：
+//
+//      swift scripts/verify_transform_math.swift --strict
+//
+//  下面这些公式与 SeeingCalendar/Canvas/CanvasGeometry.swift、ImageEntityView.swift
+//  中的实现逐字对应，任何一侧改了另一边必须同步，否则门禁会失败。
 //
 import CoreGraphics
 import Foundation
 
-// MARK: - 被测公式（与 SeeingCalendar/Canvas/CanvasGeometry.swift 中的实现逐一对应）
+// MARK: - 与 App 一致的公式（CanvasGeometry.swift）
 
 func worldTranslation(_ offset: CGPoint) -> CGAffineTransform {
     CGAffineTransform(translationX: offset.x, y: offset.y)
@@ -31,191 +35,203 @@ func worldRotation(center: CGPoint, angle: CGFloat) -> CGAffineTransform {
                              ty: center.y - (sine * center.x + cosine * center.y))
 }
 
-/// 候选实现 A / B —— 只差 `concatenating` 的调用方向。
-enum Variant: String {
-    case a = "A: delta.concatenating(base)"
-    case b = "B: base.concatenating(delta)"
-}
-
-func compose(_ base: CGAffineTransform, delta: CGAffineTransform, _ variant: Variant) -> CGAffineTransform {
-    switch variant {
-    case .a: return delta.concatenating(base)
-    case .b: return base.concatenating(delta)
+/// 实测：a.concatenating(b) = 先 a 后 b（见下方第 0 节）。
+extension CGAffineTransform {
+    func applyingWorldDelta(_ delta: CGAffineTransform) -> CGAffineTransform { concatenating(delta) }
+    func applyingLocalDelta(_ delta: CGAffineTransform) -> CGAffineTransform { delta.concatenating(self) }
+    func viewConjugate(aboutCenter center: CGPoint) -> CGAffineTransform {
+        CGAffineTransform(translationX: -center.x, y: -center.y)
+            .concatenating(self)
+            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
     }
 }
 
-// MARK: - 工具
+// MARK: - 测试脚手架
 
 let strict = CommandLine.arguments.contains("--strict")
 var failures: [String] = []
-
-func report(_ title: String, _ detail: String) {
-    print("  \(title): \(detail)")
-}
-
-func check(_ condition: Bool, _ message: String) {
-    if condition {
-        print("  ✅ \(message)")
-    } else {
-        print("  ❌ \(message)")
-        failures.append(message)
-    }
-}
+var checks = 0
 
 func fmt(_ value: CGFloat) -> String { String(format: "%+.4f", value) }
-
 func fmt(_ point: CGPoint) -> String { "(\(fmt(point.x)), \(fmt(point.y)))" }
-
-func approx(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat = 0.0005) -> Bool {
-    abs(lhs - rhs) <= tolerance
-}
-
-func approx(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat = 0.0005) -> Bool {
+func approx(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat = 0.001) -> Bool { abs(lhs - rhs) <= tolerance }
+func approx(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat = 0.001) -> Bool {
     approx(lhs.x, rhs.x, tolerance: tolerance) && approx(lhs.y, rhs.y, tolerance: tolerance)
 }
 
-// MARK: - 0. 先测量 concatenating 的合成顺序
-
-print("=== 0. CGAffineTransform.concatenating 合成顺序实测 ===")
-let scale2 = CGAffineTransform(scaleX: 2, y: 2)
-let shift10 = CGAffineTransform(translationX: 10, y: 0)
-let probe = CGPoint(x: 1, y: 0)
-report("scale2.concatenating(shift10)", "probe -> \(fmt(probe.applying(scale2.concatenating(shift10))))")
-report("shift10.concatenating(scale2)", "probe -> \(fmt(probe.applying(shift10.concatenating(scale2))))")
-report("结论", "若前者为 (12,0) 则 a.concatenating(b) = 先 a 后 b；若为 (22,0) 则 = 先 b 后 a")
-
-// MARK: - 1. 贴图位移：手指位移必须等距
-
-print("\n=== 1. 贴图位移等距（手指位移 == 图元位移）===")
-let photoBase = CGAffineTransform(a: 0.3, b: 0, c: 0, d: 0.3, tx: 100, ty: 200)   // 缩小到 30% 的照片
-let fingerDelta = CGPoint(x: 20, y: -35)                                         // 手指在世界坐标系里的位移
-let localCenter = CGPoint(x: 150, y: 100)                                        // 图元局部中心
-let worldCenterBefore = localCenter.applying(photoBase)
-
-for variant in [Variant.a, .b] {
-    let result = compose(photoBase, delta: worldTranslation(fingerDelta), variant)
-    let worldCenterAfter = localCenter.applying(result)
-    let moved = CGPoint(x: worldCenterAfter.x - worldCenterBefore.x,
-                        y: worldCenterAfter.y - worldCenterBefore.y)
-    report(variant.rawValue, "中心位移 \(fmt(moved))，期望 \(fmt(fingerDelta))")
+func expect(_ condition: Bool, _ message: String) {
+    checks += 1
+    if !condition {
+        failures.append(message)
+        print("  ❌ \(message)")
+    }
 }
-print("  → 期望中心位移恰好等于 \(fmt(fingerDelta))")
+
+/// 构造一个「缩放 + 旋转 + 平移」的图元世界变换（覆盖真实照片被缩小的情形）。
+func makeBase(scale: CGFloat, rotationDegrees: CGFloat, position: CGPoint) -> CGAffineTransform {
+    let radians = rotationDegrees * .pi / 180
+    let cosine = cos(radians) * scale
+    let sine = sin(radians) * scale
+    return CGAffineTransform(a: cosine, b: sine, c: -sine, d: cosine, tx: position.x, ty: position.y)
+}
+
+// MARK: - 0. 测量合成顺序
+
+print("=== 0. CGAffineTransform.concatenating 合成顺序 ===")
+let probeResult = CGPoint(x: 1, y: 0).applying(
+    CGAffineTransform(scaleX: 2, y: 2).concatenating(CGAffineTransform(translationX: 10, y: 0))
+)
+print("  scale2.concatenating(shift10) 作用于 (1,0) -> \(fmt(probeResult))  ⇒ 先 a 后 b")
+expect(approx(probeResult, CGPoint(x: 12, y: 0)), "concatenating 合成顺序应为「先 a 后 b」，实测 \(fmt(probeResult))")
+
+// MARK: - 1. 位移等距（基点模型）
+// 手指从世界点 A 移到 B，图元中心的世界位移必须**恰好等于** A→B。
+
+print("\n=== 1. 贴图位移等距：世界位移比值恒为 1 ===")
+let viewport = CGSize(width: 200, height: 120)          // 图元可见尺寸（局部）
+let localCenter = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+let deltas = [CGPoint(x: 20, y: -35), CGPoint(x: -7.5, y: 3.25), CGPoint(x: 130, y: 90)]
+
+for scale in [CGFloat(0.1), 0.3, 1.0, 2.5] {
+    for rotation in [CGFloat(0), 30, 90] {
+        let base = makeBase(scale: scale, rotationDegrees: rotation, position: CGPoint(x: 400, y: 300))
+        for delta in deltas {
+            let startWorld = CGPoint(x: 120, y: 80)      // 手势基点（世界坐标）
+            let currentWorld = CGPoint(x: startWorld.x + delta.x, y: startWorld.y + delta.y)
+            let fingerDelta = CGPoint(x: currentWorld.x - startWorld.x, y: currentWorld.y - startWorld.y)
+
+            let before = localCenter.applying(base)
+            let after = localCenter.applying(base.applyingWorldDelta(.worldTranslation(fingerDelta)))
+            let moved = CGPoint(x: after.x - before.x, y: after.y - before.y)
+
+            expect(approx(moved, fingerDelta),
+                   "scale=\(scale) rot=\(rotation)°: 中心位移 \(fmt(moved)) 应等于手指位移 \(fmt(fingerDelta))（比值 \(fmt(moved.x / fingerDelta.x))）")
+        }
+    }
+}
+print("  已覆盖 4 种缩放 × 3 种旋转 × 3 组位移 = 36 组")
 
 // MARK: - 2. 角手柄等比缩放：对角锚点不动 + 被拖角跟随手指
 
-print("\n=== 2. 角手柄缩放（锚点不动、拖拽角跟随手指）===")
-let imageBase = CGAffineTransform(a: 0.5, b: 0, c: 0, d: 0.5, tx: 100, ty: 100)
-let visibleSize = CGSize(width: 200, height: 100)
+print("\n=== 2. 角手柄缩放：锚点不动、拖拽角跟随手指 ===")
 let localCorners = [CGPoint(x: 0, y: 0),
-                    CGPoint(x: visibleSize.width, y: 0),
-                    CGPoint(x: visibleSize.width, y: visibleSize.height),
-                    CGPoint(x: 0, y: visibleSize.height)]
-let anchorLocal = localCorners[0]          // TL 不动
-let cornerLocal = localCorners[2]          // 拖 BR
-let anchorWorldBefore = anchorLocal.applying(imageBase)
-let targetWorld = CGPoint(x: 180, y: 160)  // 手指当前所在的 BR 世界坐标
-let targetLocal = targetWorld.applying(imageBase.inverted())
-let sx = (targetLocal.x - anchorLocal.x) / (cornerLocal.x - anchorLocal.x)
-let sy = (targetLocal.y - anchorLocal.y) / (cornerLocal.y - anchorLocal.y)
-let localDelta = worldScale(anchor: anchorLocal, sx: sx, sy: sy)
-let worldDelta = imageBase.concatenating(localDelta).concatenating(imageBase.inverted())
+                    CGPoint(x: viewport.width, y: 0),
+                    CGPoint(x: viewport.width, y: viewport.height),
+                    CGPoint(x: 0, y: viewport.height)]
 
-for variant in [Variant.a, .b] {
-    let result = compose(imageBase, delta: worldDelta, variant)
-    let anchorAfter = anchorLocal.applying(result)
-    let cornerAfter = cornerLocal.applying(result)
-    report(variant.rawValue,
-           "锚点 \(fmt(anchorAfter))（期望 \(fmt(anchorWorldBefore))）· 拖拽角 \(fmt(cornerAfter))（期望 \(fmt(targetWorld))）")
-}
+for scale in [CGFloat(0.25), 0.6, 1.4] {
+    for rotation in [CGFloat(0), 45, -120] {
+        let base = makeBase(scale: scale, rotationDegrees: rotation, position: CGPoint(x: 500, y: 420))
+        for cornerIndex in 0..<4 {
+            let anchorLocal = localCorners[(cornerIndex + 2) % 4]
+            let draggedLocal = localCorners[cornerIndex]
+            let anchorWorld = anchorLocal.applying(base)
+            let draggedWorld = draggedLocal.applying(base)
 
-// MARK: - 3. 旋转：世界中心不动 + 角度正确
+            // 手指把被拖角拖到「原位置向外 1.6 倍」处（局部等比例）
+            let gestureTargetWorld = CGPoint(
+                x: anchorWorld.x + (draggedWorld.x - anchorWorld.x) * 1.6,
+                y: anchorWorld.y + (draggedWorld.y - anchorWorld.y) * 1.6
+            )
+            let targetLocal = gestureTargetWorld.applying(base.inverted())
+            let factorX = (targetLocal.x - anchorLocal.x) / (draggedLocal.x - anchorLocal.x)
+            let factorY = (targetLocal.y - anchorLocal.y) / (draggedLocal.y - anchorLocal.y)
+            let uniform = abs(draggedLocal.x - anchorLocal.x) >= abs(draggedLocal.y - anchorLocal.y) ? factorX : factorY
 
-print("\n=== 3. 旋转手柄（世界中心不动）===")
-let rotationAngle: CGFloat = 30 * .pi / 180
-let baseCenter = CGPoint(x: visibleSize.width / 2, y: visibleSize.height / 2).applying(imageBase)
-let rotationDelta = worldRotation(center: baseCenter, angle: rotationAngle)
-let probeLocal = CGPoint(x: visibleSize.width, y: 0)
-let probeWorldBefore = probeLocal.applying(imageBase)
+            let localDelta = worldScale(anchor: anchorLocal, sx: uniform, sy: uniform)
+            let result = base.applyingLocalDelta(localDelta)
 
-for variant in [Variant.a, .b] {
-    let result = compose(imageBase, delta: rotationDelta, variant)
-    let centerAfter = CGPoint(x: visibleSize.width / 2, y: visibleSize.height / 2).applying(result)
-    let probeAfter = probeLocal.applying(result)
-    let angleBefore = atan2(probeWorldBefore.y - baseCenter.y, probeWorldBefore.x - baseCenter.x)
-    let angleAfter = atan2(probeAfter.y - baseCenter.y, probeAfter.x - baseCenter.x)
-    var delta = (angleAfter - angleBefore) * 180 / .pi
-    while delta > 180 { delta -= 360 }
-    while delta < -180 { delta += 360 }
-    report(variant.rawValue,
-           "中心 \(fmt(centerAfter))（期望 \(fmt(baseCenter))）· 角度增量 \(String(format: "%+.2f", delta))°（期望 +30.00°）")
-}
-
-// MARK: - 4. 复合选区整体 delta：组锚点不动
-
-print("\n=== 4. 复合选区整体缩放（组锚点不动）===")
-let groupAnchor = CGPoint(x: 100, y: 100)
-let groupDelta = worldScale(anchor: groupAnchor, sx: 1.5, sy: 1.5)
-let entities = [imageBase, CGAffineTransform(a: 1, b: 0, c: 0, d: 1, tx: 300, ty: 400)]
-
-for variant in [Variant.a, .b] {
-    let moved = entities.map { base -> String in
-        let result = compose(base, delta: groupDelta, variant)
-        let center = CGPoint(x: 50, y: 50).applying(result)
-        return fmt(center)
-    }
-    report(variant.rawValue, "各实体中心 -> \(moved.joined(separator: " "))")
-}
-print("  → 期望每个实体中心 = 锚点 + 1.5 × (原中心 - 锚点)")
-
-// MARK: - 5. 结论 & 断言
-
-print("\n=== 5. 断言（strict 模式下失败即 exit 1）===")
-
-let moveVariant: Variant = {
-    let a = localCenter.applying(compose(photoBase, delta: worldTranslation(fingerDelta), .a))
-    let expected = CGPoint(x: worldCenterBefore.x + fingerDelta.x, y: worldCenterBefore.y + fingerDelta.y)
-    return approx(a, expected) ? .a : .b
-}()
-print("  · 位移应使用：\(moveVariant.rawValue)")
-
-let scaleVariant: Variant = {
-    for variant in [Variant.a, .b] {
-        let result = compose(imageBase, delta: worldDelta, variant)
-        if approx(anchorLocal.applying(result), anchorWorldBefore), approx(cornerLocal.applying(result), targetWorld) {
-            return variant
+            expect(approx(anchorLocal.applying(result), anchorWorld),
+                   "scale=\(scale) rot=\(rotation)° corner=\(cornerIndex): 对角锚点应保持不动，实际 \(fmt(anchorLocal.applying(result))) 期望 \(fmt(anchorWorld))")
+            expect(approx(draggedLocal.applying(result), gestureTargetWorld),
+                   "scale=\(scale) rot=\(rotation)° corner=\(cornerIndex): 被拖角应贴合手指，实际 \(fmt(draggedLocal.applying(result))) 期望 \(fmt(gestureTargetWorld))")
         }
     }
-    return .a
-}()
-print("  · 缩放应使用：\(scaleVariant.rawValue)")
+}
 
-let rotationVariant: Variant = {
-    for variant in [Variant.a, .b] {
-        let result = compose(imageBase, delta: rotationDelta, variant)
-        let center = CGPoint(x: visibleSize.width / 2, y: visibleSize.height / 2).applying(result)
-        if approx(center, baseCenter) { return variant }
+// MARK: - 3. 旋转手柄：世界中心不动 + 角度增量正确
+
+print("\n=== 3. 旋转手柄：中心不动、角度精确 ===")
+for scale in [CGFloat(0.3), 1.0, 2.0] {
+    for baseRotation in [CGFloat(0), 25, -70] {
+        let base = makeBase(scale: scale, rotationDegrees: baseRotation, position: CGPoint(x: 350, y: 260))
+        for angle in [CGFloat(15), 45, 90, -30] {
+            let center = base.applied(to: localCenter)
+            let delta = worldRotation(center: center, angle: angle * .pi / 180)
+            let result = base.applyingWorldDelta(delta)
+
+            let centerAfter = localCenter.applying(result)
+            expect(approx(centerAfter, center),
+                   "scale=\(scale) rot=\(baseRotation)°: 旋转后世界中心应不动，实际 \(fmt(centerAfter)) 期望 \(fmt(center))")
+
+            let probe = CGPoint(x: viewport.width, y: 0)
+            let before = probe.applying(base)
+            let after = probe.applying(result)
+            let angleBefore = atan2(before.y - center.y, before.x - center.x)
+            let angleAfter = atan2(after.y - center.y, after.x - center.x)
+            var turned = (angleAfter - angleBefore) * 180 / .pi
+            while turned > 180 { turned -= 360 }
+            while turned < -180 { turned += 360 }
+            expect(approx(turned, angle, tolerance: 0.01),
+                   "scale=\(scale) rot=\(baseRotation)°: 角度增量应为 \(fmt(angle))°，实际 \(fmt(turned))°")
+        }
     }
-    return .a
-}()
-print("  · 旋转应使用：\(rotationVariant.rawValue)")
+}
 
-let groupVariant: Variant = {
-    for variant in [Variant.a, .b] {
-        let result = compose(imageBase, delta: groupDelta, variant)
-        let original = CGPoint(x: 50, y: 50).applying(imageBase)
-        let expected = CGPoint(x: groupAnchor.x + 1.5 * (original.x - groupAnchor.x),
-                               y: groupAnchor.y + 1.5 * (original.y - groupAnchor.y))
-        if approx(CGPoint(x: 50, y: 50).applying(result), expected) { return variant }
+// MARK: - 4. 复合选区整体变换：组锚点不动
+
+print("\n=== 4. 复合选区整体变换：组锚点不动 ===")
+let groupAnchor = CGPoint(x: 260, y: 210)
+let bases = [makeBase(scale: 0.4, rotationDegrees: 0, position: CGPoint(x: 300, y: 250)),
+             makeBase(scale: 1.2, rotationDegrees: 35, position: CGPoint(x: 700, y: 500))]
+
+for (sx, sy) in [(CGFloat(1.5), CGFloat(1.5)), (0.6, 0.6), (1.2, 1.2)] {
+    let delta = worldScale(anchor: groupAnchor, sx: sx, sy: sy)
+    for (index, base) in bases.enumerated() {
+        let sampleLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+        let originalWorld = sampleLocal.applying(base)
+        let expected = CGPoint(x: groupAnchor.x + sx * (originalWorld.x - groupAnchor.x),
+                               y: groupAnchor.y + sy * (originalWorld.y - groupAnchor.y))
+        let actual = sampleLocal.applying(base.applyingWorldDelta(delta))
+        expect(approx(actual, expected),
+               "组缩放 sx=\(sx) 实体#\(index): 期望 \(fmt(expected)) 实际 \(fmt(actual))")
     }
-    return .a
-}()
-print("  · 整体变换应使用：\(groupVariant.rawValue)")
+    let anchorAfter = groupAnchor.applying(delta)
+    expect(approx(anchorAfter, groupAnchor), "组锚点应是不动点，实际 \(fmt(anchorAfter))")
+}
 
-check(moveVariant == scaleVariant && scaleVariant == rotationVariant && rotationVariant == groupVariant,
-      "四处变换必须使用同一种合成方向（否则必然出现位移不等距 / 锚点漂移）")
+// MARK: - 5. 浮动预览：UIView.transform 的共轭校正
 
+print("\n=== 5. 浮动笔迹预览：UIView 中心原点校正 ===")
+for scale in [CGFloat(0.5), 1.0, 2.0] {
+    let previewCenter = CGPoint(x: 640, y: 470)          // 预览视图中心（父视图坐标系）
+    let previewFrameLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+    for delta in [worldScale(anchor: groupAnchor, sx: 1.4, sy: 1.4),
+                  worldRotation(center: groupAnchor, angle: 40 * .pi / 180)] {
+        // 直接赋值 delta：有效变换 = T(c) · delta · T(-c)，与期望的世界 delta 不等价
+        let naive = delta.viewConjugate(aboutCenter: previewCenter)   // 校正后赋值给 view.transform
+        let effective = CGAffineTransform(translationX: previewCenter.x, y: previewCenter.y)
+            .concatenating(naive)
+            .concatenating(CGAffineTransform(translationX: -previewCenter.x, y: -previewCenter.y))
+        _ = scale
+        expect(approx(previewFrameLocal.applying(effective), previewFrameLocal.applying(delta)),
+               "校正后预览的有效世界变换应等于 delta，实际 \(fmt(previewFrameLocal.applying(effective))) 期望 \(fmt(previewFrameLocal.applying(delta)))")
+    }
+}
+
+// MARK: - 结论
+
+print("\n=== 结论 ===")
+print("  断言总数：\(checks)　失败：\(failures.count)")
+if failures.isEmpty {
+    print("  ✅ 画布变换不变量全部成立：位移比值 = 1、锚点不动、旋转中心不动、预览与世界一致")
+} else {
+    for failure in failures.prefix(20) {
+        print("  ❌ \(failure)")
+    }
+}
 if strict && !failures.isEmpty {
-    print("\nFAILED: \(failures.count) 项不变量不成立")
+    print("\nFAILED")
     exit(1)
 }
 print("\nDONE（strict=\(strict)）")

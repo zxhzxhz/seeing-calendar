@@ -24,6 +24,13 @@ final class ImageEntityView: UIImageView {
     /// 是否正在被拖动。拖拽期间严禁重挂载（removeFromSuperview 会取消进行中的手势）。
     private(set) var isMoving = false
 
+    /// 起始死区（屏幕点）：吃掉误触与触摸抖动，退出死区时重新锚定，因此不会产生跳变。
+    private static let dragDeadZone: CGFloat = 3
+    /// 亚像素更新阈值（世界点）：手指几乎静止时不做无意义重排；始终以基点为参考，不会丢位移。
+    private static let dragEpsilon: CGFloat = 0.5
+    private var hasLeftDeadZone = false
+    private var gestureStartWindow: CGPoint = .zero
+
     init(item: CanvasImageItem) {
         self.itemID = item.id
         self.fileName = item.fileName
@@ -153,16 +160,37 @@ final class ImageEntityView: UIImageView {
             // 必须先置位：onSelect 会触发“选中置顶”，此时若重挂载会立刻打断本手势。
             isMoving = true
             gestureBase = worldTransform
+            // 基点模型：首触点为锚，之后一律「当前点 − 基点」求位移，不做增量累加（避免误差累积）。
             gestureStartPoint = gesture.location(in: superview)
+            gestureStartWindow = gesture.location(in: window ?? superview ?? self)
+            hasLeftDeadZone = false
             onSelect?(self)
             onBeginMove?(self)
         case .changed:
-            guard let base = gestureBase, let parent = superview, let start = gestureStartPoint else { return }
-            // 注意：此处必须使用 location 差值而非 translation(in:)，
-            // 否则在缩放过的祖先坐标系（画布 zoomScale ≠ 1）下，手指位移与贴图位移不等距。
+            guard let base = gestureBase, let parent = superview, var start = gestureStartPoint else { return }
             let current = gesture.location(in: parent)
+
+            // 去抖 ①：起始死区。在手势刚成立时忽略极小位移，避免误触/抖动；
+            //          退出死区时把基点重锚到当前位置 —— 因此死区不会造成任何跳变。
+            if !hasLeftDeadZone {
+                let reference = window ?? parent
+                let windowPoint = gesture.location(in: reference)
+                let travel = hypot(windowPoint.x - gestureStartWindow.x, windowPoint.y - gestureStartWindow.y)
+                guard travel >= Self.dragDeadZone else { return }
+                hasLeftDeadZone = true
+                gestureStartPoint = current
+                start = current
+            }
+
+            // 位移 = 当前点 − 基点，两个点都取自**画布世界坐标系**：
+            // 因此天然免受画布 zoomScale、图元自身缩放/旋转的影响（比值恒为 1）。
             let delta = CGPoint(x: current.x - start.x, y: current.y - start.y)
-            worldTransform = CGAffineTransform.worldTranslation(delta).concatenating(base)
+
+            // 去抖 ②：亚像素过滤。手指近乎静止时不触发重排；
+            //          因为位移始终相对基点计算，所以不会像增量式实现那样丢失位移。
+            guard abs(delta.x) > Self.dragEpsilon || abs(delta.y) > Self.dragEpsilon else { return }
+
+            worldTransform = base.applyingWorldDelta(.worldTranslation(delta))
             applyWorldTransform()
             onTransformChanged?(self)
         case .ended, .cancelled, .failed:
@@ -170,6 +198,7 @@ final class ImageEntityView: UIImageView {
             isMoving = false
             gestureBase = nil
             gestureStartPoint = nil
+            hasLeftDeadZone = false
             onEndMove?(self)
         default:
             break

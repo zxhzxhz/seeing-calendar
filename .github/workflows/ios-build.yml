@@ -36,7 +36,7 @@ jobs:
           xcodegen --version
 
       - name: Verify canvas transform math (real CoreGraphics)
-        run: swift scripts/verify_transform_math.swift
+        run: swift scripts/verify_transform_math.swift --strict   # 不变量不成立即让构建失败
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml

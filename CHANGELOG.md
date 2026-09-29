@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.3]
+
+### 待归档
+
+- （填写本次变更）
+
+# Changelog
+
 本项目所有值得记录的变更都会写在这里。
 版本号规则：`MARKETING_VERSION` 见 `project.yml`（用 `python scripts/bump_version.py` 自增），
 `CFBundleVersion`（BUILD 号）由 CI 使用 GitHub Actions 的 run number 注入，因此每个 IPA 都能追溯到具体构建。

@@ -329,9 +329,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             scaleX = scaleY
         }
 
+        // 缩放定义在图元**局部**坐标系、锚点为局部角点：
+        // 正确写法是「局部 delta → 再 base」，实测可保证锚点不动且被拖角精确跟随手指。
         let localDelta = CGAffineTransform.worldScale(anchor: anchorLocal, sx: scaleX, sy: scaleY)
-        let worldDelta = base.concatenating(localDelta).concatenating(baseInverse)
-        entity.update(transform: worldDelta.concatenating(base))
+        entity.update(transform: base.applyingLocalDelta(localDelta))
         refreshSelectionOverlay()
     }
 
@@ -348,8 +349,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         if snapped.snapped, abs(snapped.angle - raw) > 0.0001 {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
+        // 旋转定义在**世界**坐标系（绕世界中心）→ 先 base 后 delta。
         let delta = CGAffineTransform.worldRotation(center: center, angle: snapped.angle - baseRotation)
-        entity.update(transform: delta.concatenating(base))
+        entity.update(transform: base.applyingWorldDelta(delta))
         refreshSelectionOverlay()
     }
 
@@ -401,9 +403,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                              width: max(0.02, (maxX - minX) / base.natural.width),
                              height: max(0.02, (maxY - minY) / base.natural.height))
         // 保持可见内容就地不动：先平移回原图坐标系，再套用基准矩阵。
+        // 裁剪平移发生在**原图局部**坐标系（新视窗原点相对基准视窗的偏移）→ 先 delta 后 base。
         let translation = CGAffineTransform(translationX: base.natural.width * (newCrop.origin.x - base.crop.origin.x),
                                             y: base.natural.height * (newCrop.origin.y - base.crop.origin.y))
-        entity.update(cropRect: newCrop, worldTransform: translation.concatenating(base.transform))
+        entity.update(cropRect: newCrop, worldTransform: base.transform.applyingLocalDelta(translation))
         croppingImageID = id
         selectionKind = .cropping(id)
         refreshSelectionOverlay()
@@ -465,9 +468,14 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         groupAccumulatedDelta = delta
         isGroupTransforming = true
         for (id, base) in groupBaseTransforms {
-            entity(for: id)?.update(transform: delta.concatenating(base))
+            // 整体变换是世界坐标系的 delta（组锚点不动）→ 先 base 后 delta。
+            entity(for: id)?.update(transform: base.applyingWorldDelta(delta))
         }
-        floatingPreview?.transform = delta
+        if let preview = floatingPreview {
+            // UIView.transform 绕自身中心施加，需共轭校正才能等价于世界 delta，
+            // 否则“浮动笔迹预览”会与最终落盘的笔迹错位。
+            preview.transform = delta.viewConjugate(aboutCenter: preview.center)
+        }
         refreshSelectionOverlay()
     }
 

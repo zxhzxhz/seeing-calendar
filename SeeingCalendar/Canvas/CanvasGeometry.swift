@@ -1,7 +1,9 @@
 import UIKit
 
 extension CGAffineTransform {
-    /// 世界坐标系的纯平移（左乘语义：先平移，再应用右侧变换）。
+    /// 世界坐标系的纯平移。
+    /// **必须配合 `base.applyingWorldDelta(_:)` 使用**；直接 `worldTranslation(d).concatenating(base)`
+    /// 会把位移施加在局部坐标系里（被图元自身缩放比缩放），这正是「手指位移 ≠ 图元位移」的根因。
     static func worldTranslation(_ offset: CGPoint) -> CGAffineTransform {
         CGAffineTransform(translationX: offset.x, y: offset.y)
     }
@@ -34,6 +36,28 @@ extension CGAffineTransform {
     /// 对点应用变换（与 `CGPoint.applying(_:)` 语义一致的表达式写法）。
     func applied(to point: CGPoint) -> CGPoint {
         point.applying(self)
+    }
+
+    // MARK: - 叠加 delta 的两种语义（实测：a.concatenating(b) = 先 a 后 b）
+
+    /// 把**世界坐标系**的 delta 叠加到既有变换上：结果 = 先本变换、再 delta。
+    /// 用于：贴图位移、旋转手柄、复合选区整体变换。
+    func applyingWorldDelta(_ delta: CGAffineTransform) -> CGAffineTransform {
+        concatenating(delta)
+    }
+
+    /// 把**局部坐标系**的 delta 叠加到既有变换上：结果 = 先 delta、再本变换。
+    /// 用于：四角等比缩放（缩放定义在图元自身坐标系且锚点为局部角点）、裁剪的局部平移。
+    func applyingLocalDelta(_ delta: CGAffineTransform) -> CGAffineTransform {
+        delta.concatenating(self)
+    }
+
+    /// 让 `UIView.transform` 在父视图坐标系下等价于世界变换 `delta`
+    /// （UIView 的 transform 是以视图中心为原点施加的，需做一次共轭校正）。
+    func viewConjugate(aboutCenter center: CGPoint) -> CGAffineTransform {
+        CGAffineTransform(translationX: -center.x, y: -center.y)
+            .concatenating(self)
+            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
     }
 }
 
