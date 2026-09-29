@@ -8,14 +8,18 @@ protocol SelectionOverlayDelegate: AnyObject {
                           to point: CGPoint,
                           state: UIGestureRecognizer.State)
     func selectionOverlay(_ overlay: SelectionOverlayView, didCompleteLasso points: [CGPoint])
-    /// 复合选区内拖动：整体平移。
+    /// 变形态下拖动选区内部：整体平移。
     func selectionOverlay(_ overlay: SelectionOverlayView,
                           didDragInterior point: CGPoint,
                           state: UIGestureRecognizer.State)
 }
 
-/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **iOS 原生编辑菜单** / 自定义套索捕获。
-/// 所有视觉元素按 `contentScale = 1/zoomScale` 反向缩放，保证屏幕上的尺寸恒定。
+/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **iOS 原生编辑菜单** / 自定义套索捕获 / 内部拖动。
+///
+/// 手势路由（v1.0.5 修正，三处真机问题都出在这一层）：
+/// 1. 手柄与内部拖动区是**两个不同的视图**，手柄在其之上 —— 触摸手柄不会被内部拖动"覆盖"；
+/// 2. `hitTest` 先让子视图（手柄/菜单/内部区）出手，**即使处于套索模式**，最后才由覆盖层自己接管套索；
+/// 3. 套索模式下，从已有选区内部开始的触摸不产生新套索。
 @MainActor
 final class SelectionOverlayView: UIView {
     enum Mode: Equatable {
@@ -53,8 +57,8 @@ final class SelectionOverlayView: UIView {
             if !isLassoActive {
                 lassoPoints.removeAll()
                 lassoLayer.path = nil
+                isCapturingLasso = false
             }
-            isUserInteractionEnabled = true
         }
     }
 
@@ -63,11 +67,15 @@ final class SelectionOverlayView: UIView {
     private let lassoLayer = CAShapeLayer()
     private var handleViews: [SelectionHandleView] = []
     private var lassoPoints: [CGPoint] = []
+    private var isCapturingLasso = false
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
     private var menuActions: [SelectionAction] = []
     private var lastPresentedTag: Int = -1
     /// 呈现代次：同一帧内多次触发时只允许最后一次真正弹出，避免重复弹菜单。
     private var menuGeneration: Int = 0
+
+    /// 内部拖动区：独立子视图，保证它的手势不会"盖住"其上的手柄。
+    private let interiorView = SelectionInteriorView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -86,39 +94,10 @@ final class SelectionOverlayView: UIView {
         lassoLayer.lineJoin = .round
         layer.addSublayer(lassoLayer)
 
+        addSubview(interiorView)
+        interiorView.addGestureRecognizer(interiorPan)
+
         addInteraction(editMenu)
-        addGestureRecognizer(interiorPan)
-    }
-
-    /// 复合选区内部拖动 = 整体平移。
-    private lazy var interiorPan: UIPanGestureRecognizer = {
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleInteriorPan(_:)))
-        pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = false
-        return pan
-    }()
-
-    @objc private func handleInteriorPan(_ gesture: UIPanGestureRecognizer) {
-        guard isInteriorDraggable else { return }
-        delegate?.selectionOverlay(self, didDragInterior: gesture.location(in: self), state: gesture.state)
-    }
-
-    /// 复合选区（纯笔迹 / 笔迹+贴图）内部可整体拖动。
-    /// 单图与裁剪态不接管内部：那两种状态由贴图自身的手势负责移动。
-    var isInteriorDraggable: Bool {
-        switch mode {
-        case .composite, .compositeTransform: return true
-        default: return false
-        }
-    }
-
-    /// 复合选区的世界包围盒。
-    private var compositeRect: CGRect? {
-        switch mode {
-        case .composite(let rect), .compositeTransform(let rect): return rect
-        default: return nil
-        }
     }
 
     required init?(coder: NSCoder) {
@@ -127,32 +106,43 @@ final class SelectionOverlayView: UIView {
 
     // MARK: - 命中判定
 
+    /// 覆盖层自身是否愿意接收该点（子视图由 hitTest 处理）。
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        if isLassoActive { return true }
         if hitsInteractiveElement(point) { return true }
-        // 复合选区内部同样属于「选区自身」：用于整体拖动，也用于避免误清选区。
-        if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(point) { return true }
-        return false
+        // 其余区域仅在套索模式下由覆盖层接管（用于绘制新套索）。
+        return isLassoActive
     }
 
+    /// 关键：先让子视图出手（手柄 / 菜单 / 内部拖动区），**即使处于套索模式**；
+    /// 都未命中时才由覆盖层自己接管套索。否则套索模式下手柄永远点不到。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if isLassoActive { return self }
-        return super.hitTest(point, with: event)
+        for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
+            let local = convert(point, to: subview)
+            guard subview.point(inside: local, with: event) else { continue }
+            if let hit = subview.hitTest(local, with: event) { return hit }
+        }
+        return isLassoActive ? self : nil
     }
 
-    // MARK: - 外部查询与控制
+    /// 该点是否落在当前选区（复合选区包围盒）内部。
+    /// 用于：选区内部的点击不取消选中（取消选中只发生在点选区之外时）。
+    func containsSelection(_ point: CGPoint) -> Bool {
+        guard let rect = compositeRect else { return false }
+        return rect.insetBy(dx: -8, dy: -8).contains(point)
+    }
 
-    /// 命中测试：仅判定「手柄」等真实交互元素（不含覆盖全屏的套索捕获区）。
-    /// 用于让“点按空白处取消选中”不被套索模式的命中判定吃掉。
+    /// 命中测试：仅判定「手柄 / 菜单 / 内部拖动区」等真实交互元素。
+    /// 供容器判断「这次点击是否应取消选区」。
     func hitsInteractiveElement(_ point: CGPoint) -> Bool {
         for subview in subviews where !subview.isHidden && subview.alpha > 0.01 {
             if subview.point(inside: convert(point, to: subview), with: nil) { return true }
         }
-        if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(point) { return true }
         return false
     }
 
-    /// 主动收起菜单（开始拖拽时调用，手指脱离后再由容器重新弹出）。
+    // MARK: - 外部查询与控制
+
+    /// 主动收起菜单。
     func dismissMenu() {
         guard lastPresentedTag != -1 else { return }
         lastPresentedTag = -1
@@ -179,7 +169,7 @@ final class SelectionOverlayView: UIView {
                 let handle = SelectionHandleView(kind: kind, baseSize: baseSize(for: kind))
                 let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
                 handle.addGestureRecognizer(pan)
-                addSubview(handle)
+                addSubview(handle)          // 手柄始终位于 interiorView 之上
                 handleViews.append(handle)
             }
         }
@@ -219,7 +209,41 @@ final class SelectionOverlayView: UIView {
             handle.center = position
             handle.transform = CGAffineTransform(scaleX: scale, y: scale)
         }
+
+        // 内部拖动区：仅「变形态」激活（其余状态不许直接拖动选中对象）。
+        interiorView.isActive = isInteriorDraggable
+        interiorView.region = compositeRect ?? .null
+
         syncEditMenu(force: false)
+    }
+
+    // MARK: - 内部拖动（仅变形态）
+
+    private lazy var interiorPan: UIPanGestureRecognizer = {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleInteriorPan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        pan.cancelsTouchesInView = false
+        return pan
+    }()
+
+    @objc private func handleInteriorPan(_ gesture: UIPanGestureRecognizer) {
+        guard isInteriorDraggable else { return }
+        delegate?.selectionOverlay(self, didDragInterior: gesture.location(in: self), state: gesture.state)
+    }
+
+    /// 只有「变形」态才允许拖动选区内部整体平移。
+    var isInteriorDraggable: Bool {
+        if case .compositeTransform = mode { return true }
+        return false
+    }
+
+    /// 复合选区的世界包围盒。
+    private var compositeRect: CGRect? {
+        switch mode {
+        case .composite(let rect), .compositeTransform(let rect): return rect
+        default: return nil
+        }
     }
 
     // MARK: - iOS 原生菜单
@@ -346,12 +370,24 @@ final class SelectionOverlayView: UIView {
             super.touchesBegan(touches, with: event)
             return
         }
-        lassoPoints = [touch.location(in: self)]
+        let location = touch.location(in: self)
+
+        // 已有选区时，从选区内部开始的触摸**不产生新套索**
+        // （否则拖动/按压选中对象会立刻画出一个新选区，手一松就把原选择替换掉）。
+        if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(location) {
+            isCapturingLasso = false
+            lassoPoints.removeAll()
+            lassoLayer.path = nil
+            return
+        }
+
+        isCapturingLasso = true
+        lassoPoints = [location]
         updateLassoLayer()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard isLassoActive, let touch = touches.first else {
+        guard isLassoActive, isCapturingLasso, let touch = touches.first else {
             super.touchesMoved(touches, with: event)
             return
         }
@@ -364,6 +400,11 @@ final class SelectionOverlayView: UIView {
             super.touchesEnded(touches, with: event)
             return
         }
+        guard isCapturingLasso else {
+            isCapturingLasso = false
+            return
+        }
+        isCapturingLasso = false
         let path = lassoPoints
         lassoPoints = []
         lassoLayer.path = nil
@@ -372,6 +413,7 @@ final class SelectionOverlayView: UIView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        isCapturingLasso = false
         lassoPoints = []
         lassoLayer.path = nil
         super.touchesCancelled(touches, with: event)
@@ -412,6 +454,25 @@ extension SelectionOverlayView: UIEditMenuInteractionDelegate {
             return CGRect(x: anchor.x - size / 2, y: anchor.y - size / 2, width: size, height: size)
         }
     }
+}
+
+/// 变形态下的选区内部拖动区。
+/// 作为覆盖层的**最底层子视图**存在：手柄在其上，因此触摸手柄不会被内部拖动抢走；
+/// 同时它吞掉触摸事件，避免冒泡到覆盖层的套索捕获。
+@MainActor
+final class SelectionInteriorView: UIView {
+    var isActive: Bool = false
+    var region: CGRect = .null
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard isActive, !region.isNull else { return false }
+        return region.insetBy(dx: -8, dy: -8).contains(point)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {}
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {}
 }
 
 /// 单个控制手柄：白色实心 + 蓝色描边 + 可选图形。

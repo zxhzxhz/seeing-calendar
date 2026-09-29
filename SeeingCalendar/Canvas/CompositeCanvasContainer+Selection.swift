@@ -215,7 +215,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         switch state {
         case .began:
             isAdjustingSelection = true
-            selectionOverlay.dismissMenu()
+            // 同样不在拖拽开始时收起菜单：会中断进行中的触摸（见 onBeginMove 注释）。
             beginHandleGesture(kind, point: point)
         case .changed:
             updateHandleGesture(kind, point: point)
@@ -487,7 +487,6 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         switch state {
         case .began:
             isAdjustingSelection = true
-            selectionOverlay.dismissMenu()
             groupBaseBounds = selectionBounds()
             groupBaseTransforms = imageViews.reduce(into: [:]) { partial, view in
                 if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }

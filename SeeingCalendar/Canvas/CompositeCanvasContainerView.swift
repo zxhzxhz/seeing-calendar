@@ -216,8 +216,10 @@ final class CompositeCanvasContainerView: UIView {
         // 菜单退场时可能把触摸透传下来，否则会立刻把刚建立的选择清掉（表现为“变形点了没反应”）。
         if Date() < menuActionGuardUntil { return }
 
-        // 落在选区手柄 / 原生菜单上：不参与“点空白取消选择”
+        // 落在选区手柄 / 原生菜单 / 内部拖动区：不参与“点空白取消选择”
         if selectionOverlay.hitsInteractiveElement(point) { return }
+        // 落在选区内部：同样保持选中（取消选中只发生在点选区之外时）
+        if selectionOverlay.containsSelection(point) { return }
 
         // 落在贴图上：交给贴图自身的点选逻辑
         for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
@@ -293,9 +295,10 @@ final class CompositeCanvasContainerView: UIView {
         }
         entity.onBeginMove = { [weak self] view in
             guard let self else { return }
-            // 拖拽期间不重建手柄、不弹菜单：先收起菜单，手指脱离后再弹。
+            // 拖拽期间不重建手柄、不重弹菜单（由 tag/generation 守卫保证）。
+            // 注意：这里**不能**调用 dismissMenu() —— 收起原生菜单会中断正在进行中的触摸，
+            // 表现为「第一次拖动只走一下，第二次才正常」。
             self.isAdjustingSelection = true
-            self.selectionOverlay.dismissMenu()
             self.pushHistory()
             _ = view
         }
