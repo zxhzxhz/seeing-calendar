@@ -39,13 +39,17 @@ def insert_changelog(version: tuple[int, int, int]) -> None:
         return
     text = CHANGELOG.read_text(encoding="utf-8")
     marker = "## [Unreleased]"
+    placeholder = "### 待归档"
     heading = f"## [{version[0]}.{version[1]}.{version[2]}]"
     if heading in text:
         return
+    block = f"{heading}\n\n{placeholder}\n\n- （填写本次变更）\n\n"
     if marker in text:
-        text = text.replace(marker, f"{marker}\n\n### 待归档\n\n- （填写本次变更）\n", 1)
+        text = text.replace(marker, f"{marker}\n\n{block}", 1)
+    elif placeholder in text:
+        text = text.replace(placeholder, f"{heading}\n\n{placeholder}", 1)
     else:
-        text = f"# Changelog\n\n{heading}\n\n- （填写本次变更）\n\n" + text
+        text = f"# Changelog\n\n{block}" + text
     CHANGELOG.write_text(text, encoding="utf-8")
 
 
