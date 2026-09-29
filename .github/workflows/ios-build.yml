@@ -38,6 +38,9 @@ jobs:
       - name: Probe @Observable semantics
         run: swift scripts/verify_observation_semantics.swift
 
+      - name: Probe PencilKit stroke semantics
+        run: swift scripts/verify_pencilkit_stroke_semantics.swift
+
       - name: Verify canvas transform math (real CoreGraphics)
         run: swift scripts/verify_transform_math.swift --strict   # 不变量不成立即让构建失败
 
