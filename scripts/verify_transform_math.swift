@@ -17,28 +17,32 @@ import Foundation
 
 // MARK: - 与 App 一致的公式（CanvasGeometry.swift）
 
-func worldTranslation(_ offset: CGPoint) -> CGAffineTransform {
-    CGAffineTransform(translationX: offset.x, y: offset.y)
-}
-
-func worldScale(anchor: CGPoint, sx: CGFloat, sy: CGFloat) -> CGAffineTransform {
-    CGAffineTransform(a: sx, b: 0, c: 0, d: sy,
-                      tx: anchor.x - sx * anchor.x,
-                      ty: anchor.y - sy * anchor.y)
-}
-
-func worldRotation(center: CGPoint, angle: CGFloat) -> CGAffineTransform {
-    let cosine = cos(angle)
-    let sine = sin(angle)
-    return CGAffineTransform(a: cosine, b: sine, c: -sine, d: cosine,
-                             tx: center.x - (cosine * center.x - sine * center.y),
-                             ty: center.y - (sine * center.x + cosine * center.y))
-}
-
-/// 实测：a.concatenating(b) = 先 a 后 b（见下方第 0 节）。
 extension CGAffineTransform {
+    static func worldTranslation(_ offset: CGPoint) -> CGAffineTransform {
+        CGAffineTransform(translationX: offset.x, y: offset.y)
+    }
+
+    static func worldScale(anchor: CGPoint, sx: CGFloat, sy: CGFloat) -> CGAffineTransform {
+        CGAffineTransform(a: sx, b: 0, c: 0, d: sy,
+                          tx: anchor.x - sx * anchor.x,
+                          ty: anchor.y - sy * anchor.y)
+    }
+
+    static func worldRotation(center: CGPoint, angle: CGFloat) -> CGAffineTransform {
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        return CGAffineTransform(a: cosine, b: sine, c: -sine, d: cosine,
+                                 tx: center.x - (cosine * center.x - sine * center.y),
+                                 ty: center.y - (sine * center.x + cosine * center.y))
+    }
+
+    func applied(to point: CGPoint) -> CGPoint { point.applying(self) }
+
+    /// 实测：a.concatenating(b) = 先 a 后 b（见第 0 节）。
     func applyingWorldDelta(_ delta: CGAffineTransform) -> CGAffineTransform { concatenating(delta) }
     func applyingLocalDelta(_ delta: CGAffineTransform) -> CGAffineTransform { delta.concatenating(self) }
+
+    /// UIView.transform 绕自身中心施加，赋值世界 delta 时需共轭校正。
     func viewConjugate(aboutCenter center: CGPoint) -> CGAffineTransform {
         CGAffineTransform(translationX: -center.x, y: -center.y)
             .concatenating(self)
@@ -138,7 +142,7 @@ for scale in [CGFloat(0.25), 0.6, 1.4] {
             let factorY = (targetLocal.y - anchorLocal.y) / (draggedLocal.y - anchorLocal.y)
             let uniform = abs(draggedLocal.x - anchorLocal.x) >= abs(draggedLocal.y - anchorLocal.y) ? factorX : factorY
 
-            let localDelta = worldScale(anchor: anchorLocal, sx: uniform, sy: uniform)
+            let localDelta = CGAffineTransform.worldScale(anchor: anchorLocal, sx: uniform, sy: uniform)
             let result = base.applyingLocalDelta(localDelta)
 
             expect(approx(anchorLocal.applying(result), anchorWorld),
@@ -157,7 +161,7 @@ for scale in [CGFloat(0.3), 1.0, 2.0] {
         let base = makeBase(scale: scale, rotationDegrees: baseRotation, position: CGPoint(x: 350, y: 260))
         for angle in [CGFloat(15), 45, 90, -30] {
             let center = base.applied(to: localCenter)
-            let delta = worldRotation(center: center, angle: angle * .pi / 180)
+            let delta = CGAffineTransform.worldRotation(center: center, angle: angle * .pi / 180)
             let result = base.applyingWorldDelta(delta)
 
             let centerAfter = localCenter.applying(result)
@@ -186,7 +190,7 @@ let bases = [makeBase(scale: 0.4, rotationDegrees: 0, position: CGPoint(x: 300, 
              makeBase(scale: 1.2, rotationDegrees: 35, position: CGPoint(x: 700, y: 500))]
 
 for (sx, sy) in [(CGFloat(1.5), CGFloat(1.5)), (0.6, 0.6), (1.2, 1.2)] {
-    let delta = worldScale(anchor: groupAnchor, sx: sx, sy: sy)
+    let delta = CGAffineTransform.worldScale(anchor: groupAnchor, sx: sx, sy: sy)
     for (index, base) in bases.enumerated() {
         let sampleLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
         let originalWorld = sampleLocal.applying(base)
@@ -206,8 +210,8 @@ print("\n=== 5. 浮动笔迹预览：UIView 中心原点校正 ===")
 for scale in [CGFloat(0.5), 1.0, 2.0] {
     let previewCenter = CGPoint(x: 640, y: 470)          // 预览视图中心（父视图坐标系）
     let previewFrameLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
-    for delta in [worldScale(anchor: groupAnchor, sx: 1.4, sy: 1.4),
-                  worldRotation(center: groupAnchor, angle: 40 * .pi / 180)] {
+    for delta in [CGAffineTransform.worldScale(anchor: groupAnchor, sx: 1.4, sy: 1.4),
+                  CGAffineTransform.worldRotation(center: groupAnchor, angle: 40 * .pi / 180)] {
         // 直接赋值 delta：有效变换 = T(c) · delta · T(-c)，与期望的世界 delta 不等价
         let naive = delta.viewConjugate(aboutCenter: previewCenter)   // 校正后赋值给 view.transform
         let effective = CGAffineTransform(translationX: previewCenter.x, y: previewCenter.y)
