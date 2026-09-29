@@ -346,6 +346,7 @@ struct DayEditorView: View {
         }
     }
 
+    @ViewBuilder
     private func penSettings(model: EditorModel) -> some View {
         if model.activeTool == .eraser {
             eraserSettings(model: model)
