@@ -219,18 +219,22 @@ final class CompositeCanvasContainerView: UIView {
         // 1) 手柄 / 浮动菜单：交给它们自己处理
         if selectionOverlay.hitsHandleOrMenu(point) { return }
 
-        // 2) 点在贴图上：无论当前处于套索态还是变形态，都应能选中该贴图。
-        //    （变形态下触摸会被"内部拖动区"接管，贴图自身的点按手势收不到事件，
-        //      因此这里由容器代劳选中，并重新弹出菜单。）
-        for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
-            if entity.bounds.contains(entity.convert(point, from: self)) {
-                selectImage(id: entity.itemID, additive: false)
-                selectionOverlay.presentMenu()
-                return
+        // 2) 点在贴图上 → 选中该贴图。
+        //    - 变形态下**不改选对象**：用户约定"点框内保持变形态并弹菜单"；
+        //    - 裁剪态下同样不改选，避免误触退出裁剪；
+        //    - 套索态（非变形态）下触摸会被内部拖动区/套索层接管，贴图自身手势收不到事件，
+        //      因此由容器代劳选中并弹菜单。
+        if !isGroupTransforming, croppingImageID == nil {
+            for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
+                if entity.bounds.contains(entity.convert(point, from: self)) {
+                    selectImage(id: entity.itemID, additive: false)
+                    selectionOverlay.presentMenu()
+                    return
+                }
             }
         }
 
-        // 3) 点在选区内（非贴图、非手柄）：保持选中并重新弹出菜单
+        // 3) 点在选区内（非手柄）：保持选中与当前模式，并弹出编辑菜单
         if selectionOverlay.containsSelection(point) {
             selectionOverlay.presentMenu()
             return

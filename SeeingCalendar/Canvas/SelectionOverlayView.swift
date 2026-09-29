@@ -144,10 +144,20 @@ final class SelectionOverlayView: UIView {
         return isLassoActive ? self : nil
     }
 
-    /// 该点是否落在当前选区（复合选区包围盒）内部。
-    /// 用于：选区内部的点击不取消选中（取消选中只发生在点选区之外时）。
+    /// 该点是否落在当前选区内部（复合框 / 单图框 / 裁剪框）。
+    /// 用于：选区内点击保持选中与模式（取消选中只发生在点选区之外时）。
     func containsSelection(_ point: CGPoint) -> Bool {
-        guard let rect = compositeRect else { return false }
+        let rect: CGRect?
+        switch mode {
+        case .none:
+            rect = nil
+        case .composite(let box), .compositeTransform(let box):
+            rect = box
+        case .image(let quad), .cropping(let quad):
+            let box = CanvasGeometry.boundingBox(quad)
+            rect = box.isNull ? nil : box
+        }
+        guard let rect else { return false }
         return rect.insetBy(dx: -8, dy: -8).contains(point)
     }
 
@@ -168,11 +178,20 @@ final class SelectionOverlayView: UIView {
         return false
     }
 
-    /// 重新弹出菜单（用户再次点按选区时使用）。
+    /// 用户主动唤出菜单（点按选区内部时调用）。
+    /// 与「进入形态时自动弹」分离：变形/裁剪态进入不自动弹，但这里一定会弹。
     func presentMenu() {
-        guard !menuActions.isEmpty else { return }
-        lastPresentedTag = -1
-        syncEditMenu(force: true)
+        guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else { return }
+        lastPresentedTag = mode.shapeTag
+        menuGeneration &+= 1
+        let generation = menuGeneration
+        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: anchor)
+        editMenu.dismissMenu()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self, self.menuGeneration == generation else { return }
+            self.editMenu.presentEditMenu(with: configuration)
+        }
     }
 
     // MARK: - 外部查询与控制
@@ -323,7 +342,7 @@ final class SelectionOverlayView: UIView {
     // MARK: - iOS 原生菜单
 
     private func syncEditMenu(force: Bool) {
-        guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else {
+        guard !menuActions.isEmpty, autoPresentsMenu, let anchor = menuAnchorPoint() else {
             dismissMenu()
             return
         }
@@ -417,17 +436,31 @@ final class SelectionOverlayView: UIView {
         return CGPoint(x: top.x + dx / length * offset, y: top.y + dy / length * offset)
     }
 
-    /// 浮动菜单只用于「对象级」动作。
-    /// 裁剪与变形是**模式级**动作，放在编辑器底部工具条 —— 避免菜单压住正在使用的手柄
-    /// （这正是「裁剪控制点第一次拖动会停住」的真实原因：第一次点到了菜单，菜单随即收起，第二次才点到手柄）。
+    /// 各形态的可用动作。
+    /// 裁剪/变形是**模式级**动作，除了自身动作外也提供对象级动作，
+    /// 但它们**进入时不会自动弹菜单**（见 autoPresentsMenu），只有用户点按选区内部才弹
+    /// —— 这样既不会在进入模式时遮挡手柄，又能满足"点框内弹出编辑菜单"的交互约定。
     private func menuActions(for mode: Mode) -> [SelectionAction] {
         switch mode {
-        case .none, .cropping, .compositeTransform:
+        case .none:
             return []
         case .composite:
             return [.copy, .cut, .delete, .transform]
+        case .compositeTransform:
+            return [.copy, .cut, .delete, .finishTransform]
+        case .cropping:
+            return [.finishCrop, .cancelCrop]
         case .image:
             return [.copy, .crop, .replace, .bringToFront, .sendToBack, .delete]
+        }
+    }
+
+    /// 进入该形态时是否**自动**弹菜单。
+    /// 变形/裁剪属模式级操作，进入即弹会压住手柄（历史 bug），故不自动弹。
+    private var autoPresentsMenu: Bool {
+        switch mode {
+        case .compositeTransform, .cropping: return false
+        default: return true
         }
     }
 

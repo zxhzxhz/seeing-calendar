@@ -283,7 +283,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         isAdjustingSelection = false
         switch kind {
         case .imageCorner, .imageRotate:
-            isGroupTransforming = false
+            // 单图态本身不是"模式"，无需处理变形态标志。
             cropBase = nil
         case .imageEdge:
             // 保持裁剪态，等待用户点“完成裁剪”；下次手势会重新采集基准。
@@ -293,8 +293,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                 bakeStrokes(delta: delta)
             }
             groupAccumulatedDelta = nil
-            isGroupTransforming = false
             groupBaseTransforms = [:]
+            // 注意：这里**不清除** isGroupTransforming —— 变形态是"模式"，
+            // 退出只能由用户动作触发（点选区内保持并弹菜单 / 点选区外退出 / 点"完成变形"）。
+            // 此前在每次缩放/旋转结束时清除，导致"做一次操作就掉出变形态"。
         }
         gestureBaseTransform = nil
         notifySelection()
