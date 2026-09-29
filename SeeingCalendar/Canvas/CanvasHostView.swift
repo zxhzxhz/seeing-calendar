@@ -133,4 +133,10 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
     func setTool(_ tool: PKTool) {
         canvas.canvasView.tool = tool
     }
+
+    /// 导航态（取消全部工具 / 笔画）：禁止落笔，单指即可平移，双指缩放。
+    func setNavigationMode(_ enabled: Bool) {
+        scrollView.panGestureRecognizer.minimumNumberOfTouches = enabled ? 1 : 2
+        canvas.isDrawingEnabled = !enabled
+    }
 }

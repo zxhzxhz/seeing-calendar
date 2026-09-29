@@ -62,6 +62,8 @@ final class SelectionOverlayView: UIView {
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
     private var menuActions: [SelectionAction] = []
     private var lastPresentedTag: Int = -1
+    /// 呈现代次：同一帧内多次触发时只允许最后一次真正弹出，避免重复弹菜单。
+    private var menuGeneration: Int = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -100,6 +102,25 @@ final class SelectionOverlayView: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if isLassoActive { return self }
         return super.hitTest(point, with: event)
+    }
+
+    // MARK: - 外部查询与控制
+
+    /// 命中测试：仅判定「手柄」等真实交互元素（不含覆盖全屏的套索捕获区）。
+    /// 用于让“点按空白处取消选中”不被套索模式的命中判定吃掉。
+    func hitsInteractiveElement(_ point: CGPoint) -> Bool {
+        for subview in subviews where !subview.isHidden && subview.alpha > 0.01 {
+            if subview.point(inside: convert(point, to: subview), with: nil) { return true }
+        }
+        return false
+    }
+
+    /// 主动收起菜单（开始拖拽时调用，手指脱离后再由容器重新弹出）。
+    func dismissMenu() {
+        guard lastPresentedTag != -1 else { return }
+        lastPresentedTag = -1
+        menuGeneration &+= 1
+        editMenu.dismissMenu()
     }
 
     // MARK: - 状态更新
@@ -168,41 +189,38 @@ final class SelectionOverlayView: UIView {
 
     private func syncEditMenu(force: Bool) {
         guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else {
-            if lastPresentedTag != -1 {
-                lastPresentedTag = -1
-                editMenu.dismissMenu()
-            }
+            dismissMenu()
             return
         }
         let tag = mode.shapeTag
         guard force || lastPresentedTag != tag else { return }
         lastPresentedTag = tag
+        menuGeneration &+= 1
+        let generation = menuGeneration
         let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: anchor)
 
-        if force {
-            // 形态切换（例如“裁剪”进入二级状态）时旧菜单仍在退场动画中，
-            // 立即重新呈现会被系统忽略，因此先收起、再等一拍后呈现。
-            editMenu.dismissMenu()
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(160))
-                guard let self, self.lastPresentedTag == tag else { return }
-                self.editMenu.presentEditMenu(with: configuration)
-            }
-        } else {
-            editMenu.presentEditMenu(with: configuration)
+        // 形态切换（例如“裁剪”进入二级状态）时旧菜单仍在退场动画中，
+        // 立即重新呈现会被系统忽略，因此先收起、再等一拍由**最新一次**调度弹出。
+        editMenu.dismissMenu()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(force ? 160 : 60))
+            guard let self, self.menuGeneration == generation, self.lastPresentedTag == tag else { return }
+            self.editMenu.presentEditMenu(with: configuration)
         }
     }
 
+    /// 菜单锚点放在选区**下方**，避免遮挡顶部的旋转控制手柄。
     private func menuAnchorPoint() -> CGPoint? {
         let scale = max(0.05, contentScale)
+        let gap = 22 * scale
         switch mode {
         case .none:
             return nil
         case .composite(let rect), .compositeTransform(let rect):
-            return CGPoint(x: rect.midX, y: rect.minY - 12 * scale)
+            return CGPoint(x: rect.midX, y: rect.maxY + gap)
         case .image(let quad), .cropping(let quad):
-            guard let top = quad.min(by: { $0.y < $1.y }) else { return nil }
-            return CGPoint(x: top.x, y: top.y - 12 * scale)
+            guard let lowest = quad.max(by: { $0.y < $1.y }) else { return nil }
+            return CGPoint(x: lowest.x, y: lowest.y + gap)
         }
     }
 
@@ -311,9 +329,8 @@ final class SelectionOverlayView: UIView {
         let path = lassoPoints
         lassoPoints = []
         lassoLayer.path = nil
-        if path.count >= 3 {
-            delegate?.selectionOverlay(self, didCompleteLasso: path)
-        }
+        // 点一下（退化套索）也要上报：仲裁器会给出空结果，容器据此取消选中。
+        delegate?.selectionOverlay(self, didCompleteLasso: path)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -352,14 +369,9 @@ extension SelectionOverlayView: UIEditMenuInteractionDelegate {
     nonisolated func editMenuInteraction(_ interaction: UIEditMenuInteraction,
                                          targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
         MainActor.assumeIsolated {
-            switch mode {
-            case .composite(let rect), .compositeTransform(let rect):
-                return rect
-            case .image(let quad), .cropping(let quad):
-                return CanvasGeometry.boundingBox(quad)
-            case .none:
-                return .zero
-            }
+            guard let anchor = menuAnchorPoint() else { return .zero }
+            let size = 14 * max(0.05, contentScale)
+            return CGRect(x: anchor.x - size / 2, y: anchor.y - size / 2, width: size, height: size)
         }
     }
 }

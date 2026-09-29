@@ -205,7 +205,7 @@ struct DayEditorView: View {
                                       : .clear)
                         )
                 }
-                .accessibilityLabel(tool.title)
+                .accessibilityLabel(tool.title + "（再次点按可取消）")
             }
 
             Button {
@@ -252,6 +252,10 @@ struct DayEditorView: View {
 
             if model.isLassoActive {
                 Text("套索")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            } else if model.isNavigating {
+                Text("导航")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
             }

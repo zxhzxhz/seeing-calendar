@@ -8,6 +8,11 @@ struct MonthGridView: View {
     let eventsByDay: [String: [CalendarEvent]]
     let holidays: [String: WorkRestStatus]
     let availableSize: CGSize
+    /// 「今天」定位脉冲高亮的日期键与代次。
+    let pulseKey: String?
+    let pulseID: Int
+    /// 与全屏画布共享的缩放转场命名空间（iOS 18 zoom transition）。
+    let zoomNamespace: Namespace.ID
     let onSelect: (Date) -> Void
     let onOpen: (Date) -> Void
 
@@ -47,8 +52,7 @@ struct MonthGridView: View {
                 HStack(spacing: spacing) {
                     ForEach(0..<7, id: \.self) { column in
                         let index = row * 7 + column
-                        let date = gridDates[index]
-                        cell(for: date)
+                        cell(for: gridDates[index])
                     }
                 }
             }
@@ -94,11 +98,20 @@ struct MonthGridView: View {
                            events: eventsByDay[key] ?? [],
                            holiday: holidays[key] ?? .normal,
                            isSelected: CalendarUtils.isSameDay(date, selectedDate),
+                           isPulsing: pulseKey == key,
+                           pulseID: pulseID,
                            tier: tier)
             .frame(width: cellWidth, height: cellWidth)
+            .matchedTransitionSource(id: transitionID(for: key), in: zoomNamespace)
             .onTapGesture(count: 2) { onOpen(date) }
             .onTapGesture { onSelect(date) }
             .accessibilityLabel(CalendarUtils.dayTitle(date))
+    }
+
+    /// 转场源 ID 必须全局唯一：相邻月份的网格会包含同一天，
+    /// 因此用「当前月键|日期键」组合，避免同屏出现重复 source。
+    private func transitionID(for key: String) -> String {
+        "\(CalendarUtils.key(for: CalendarUtils.startOfMonth(month)))|\(key)"
     }
 
     private func loadThumbnails() async {

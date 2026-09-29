@@ -13,7 +13,7 @@ enum CellLODTier {
     }
 }
 
-/// 1:1 正方形日格：缩略图 + 日期 + 班休角标 + 分级 ICS 呈现。
+/// 1:1 正方形日格：缩略图 + 日期 + 班休角标 + 分级 ICS 呈现 + 定位脉冲。
 struct DayCellView: View {
     let date: Date
     let inCurrentMonth: Bool
@@ -22,7 +22,12 @@ struct DayCellView: View {
     let events: [CalendarEvent]
     let holiday: WorkRestStatus
     let isSelected: Bool
+    let isPulsing: Bool
+    /// 脉冲代次：每次「今天」定位都递增，保证动画可重复触发。
+    let pulseID: Int
     let tier: CellLODTier
+
+    @State private var pulseProgress: CGFloat = 0
 
     private var dayNumber: String {
         "\(CalendarUtils.calendar.component(.day, from: date))"
@@ -30,6 +35,8 @@ struct DayCellView: View {
 
     private var isToday: Bool { CalendarUtils.isToday(date) }
     private var isWeekend: Bool { CalendarUtils.isWeekend(date) }
+
+    private var cornerRadius: CGFloat { tier == .lod1Minimal ? 4 : 7 }
 
     var body: some View {
         GeometryReader { proxy in
@@ -48,11 +55,26 @@ struct DayCellView: View {
                 icsOverlay
             }
             .frame(width: size.width, height: size.height)
-            .clipShape(RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(borderColor, lineWidth: isSelected ? 2.5 : 1)
             )
+            .overlay {
+                if isPulsing {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 3)
+                        .scaleEffect(1 + 0.45 * pulseProgress)
+                        .opacity(Double(1 - pulseProgress))
+                        .id(pulseID)
+                        .onAppear {
+                            pulseProgress = 0
+                            withAnimation(.easeOut(duration: 0.62)) {
+                                pulseProgress = 1
+                            }
+                        }
+                }
+            }
             .contentShape(Rectangle())
         }
         .aspectRatio(1, contentMode: .fit)

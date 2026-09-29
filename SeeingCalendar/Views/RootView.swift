@@ -4,6 +4,8 @@ import SwiftUI
 struct EditorRequest: Identifiable {
     let day: DayRecord
     let pageIndex: Int
+    /// 与 MonthGridView 的 `matchedTransitionSource` 一一对应（当前月键|日期键）。
+    let sourceID: String
     var id: String { "\(day.key)-\(pageIndex)" }
 }
 
@@ -17,6 +19,8 @@ struct RootView: View {
 
     @AppStorage("fingerDrawingEnabled") private var fingerDrawingEnabled = false
     @AppStorage("lastAutoSnapshot") private var lastAutoSnapshot: Double = 0
+
+    @Namespace private var zoomNamespace
 
     @State private var selectedWorkspaceUUID: UUID?
     @State private var month: Date = CalendarUtils.startOfMonth(Date())
@@ -32,7 +36,10 @@ struct RootView: View {
 
     // 翻月手势
     @State private var monthDragOffset: CGFloat = 0
-    @State private var isMonthDragging = false
+    @State private var isSettling = false
+    // 「今天」定位脉冲
+    @State private var pulseKey: String?
+    @State private var pulseToken: Int = 0
 
     private var repository: PageRepository { PageRepository(context: context) }
 
@@ -58,9 +65,9 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isPortrait = proxy.size.height > proxy.size.width
+            let isPortrait = DeviceLayout.isPortrait
             VStack(spacing: 0) {
-                headerBar
+                headerBar(containerWidth: proxy.size.width)
                 Divider()
                 if isPortrait {
                     portraitLayout(width: proxy.size.width)
@@ -77,7 +84,7 @@ struct RootView: View {
         .onOpenURL { url in
             Task { await handleIncoming(url: url) }
         }
-        // 画布编辑器默认整屏打开（这是创作态，不是辅助卡片）
+        // 画布编辑器整屏打开，并以被点选的日格作为缩放转场起点（iOS 18 zoom transition）。
         .fullScreenCover(item: $editorRequest) { request in
             DayEditorView(day: request.day,
                           workspace: workspace ?? request.day.workspace ?? repository.ensureDefaultWorkspace(),
@@ -85,6 +92,7 @@ struct RootView: View {
                           initialPageIndex: request.pageIndex,
                           isFingerDrawingEnabled: fingerDrawingEnabled,
                           onFingerDrawingChanged: { fingerDrawingEnabled = $0 })
+                .navigationTransition(.zoom(sourceID: request.sourceID, in: zoomNamespace))
         }
         .sheet(isPresented: $showSubscriptions) {
             SubscriptionsView(eventStore: eventStore) {
@@ -140,28 +148,19 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    // MARK: - 月历 + 左右滑动翻月
+    // MARK: - 月历 + 左右滑动翻月（上/下月常驻预渲染）
 
     private func monthPager(availableSize: CGSize, containerWidth: CGFloat) -> some View {
         let cell = MonthGridView.cellWidth(availableSize: availableSize)
         let height = MonthGridView.gridHeight(cellWidth: cell)
-        return ZStack {
-            if isMonthDragging {
-                HStack(spacing: 0) {
-                    if monthDragOffset > 0 {
-                        page(for: CalendarUtils.addMonths(-1, to: month), availableSize: availableSize, width: containerWidth)
-                    }
-                    page(for: month, availableSize: availableSize, width: containerWidth)
-                    if monthDragOffset < 0 {
-                        page(for: CalendarUtils.addMonths(1, to: month), availableSize: availableSize, width: containerWidth)
-                    }
-                }
-                .offset(x: monthDragOffset > 0 ? -containerWidth + monthDragOffset : monthDragOffset)
-            } else {
-                page(for: month, availableSize: availableSize, width: containerWidth)
-            }
+        return HStack(spacing: 0) {
+            page(for: CalendarUtils.addMonths(-1, to: month), availableSize: availableSize, width: containerWidth)
+            page(for: month, availableSize: availableSize, width: containerWidth)
+            page(for: CalendarUtils.addMonths(1, to: month), availableSize: availableSize, width: containerWidth)
         }
-        .frame(width: containerWidth, height: height, alignment: .top)
+        .frame(width: containerWidth * 3, height: height, alignment: .leading)
+        .offset(x: -containerWidth + monthDragOffset)
+        .frame(width: containerWidth, height: height, alignment: .leading)
         .clipped()
         .contentShape(Rectangle())
         .simultaneousGesture(monthSwipe(containerWidth: containerWidth))
@@ -172,41 +171,45 @@ struct RootView: View {
             .frame(width: width)
     }
 
+    /// 与 iOS 原生桌面翻页一致：位移阈值很低，主要判定依据是**速度**。
     private func monthSwipe(containerWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 16)
+        DragGesture(minimumDistance: 12)
             .onChanged { value in
+                guard !isSettling else { return }
                 let dx = value.translation.width
                 let dy = value.translation.height
                 guard abs(dx) > abs(dy) else { return }   // 只接管横向滑动
-                if !isMonthDragging { isMonthDragging = true }
                 monthDragOffset = dx
             }
             .onEnded { value in
-                guard isMonthDragging else { return }
-                let projected = value.predictedEndTranslation.width
-                let threshold = containerWidth * 0.25
-                if monthDragOffset > threshold || projected > containerWidth * 0.55 {
-                    withAnimation(.easeOut(duration: 0.26)) {
-                        monthDragOffset = containerWidth
-                    } completion: {
-                        month = CalendarUtils.addMonths(-1, to: month)
+                guard !isSettling else { return }
+                let velocity = value.velocity.width        // > 0 表示向右滑（看上一月）
+                let distanceThreshold = containerWidth * 0.13
+                var direction = 0                          // +1 → 下一月（内容左移）
+                if velocity > 220 {
+                    direction = -1
+                } else if velocity < -220 {
+                    direction = 1
+                } else if monthDragOffset > distanceThreshold {
+                    direction = -1
+                } else if monthDragOffset < -distanceThreshold {
+                    direction = 1
+                }
+
+                guard direction != 0 else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
                         monthDragOffset = 0
-                        isMonthDragging = false
                     }
-                } else if monthDragOffset < -threshold || projected < -containerWidth * 0.55 {
-                    withAnimation(.easeOut(duration: 0.26)) {
-                        monthDragOffset = -containerWidth
-                    } completion: {
-                        month = CalendarUtils.addMonths(1, to: month)
-                        monthDragOffset = 0
-                        isMonthDragging = false
-                    }
-                } else {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                        monthDragOffset = 0
-                    } completion: {
-                        isMonthDragging = false
-                    }
+                    return
+                }
+
+                isSettling = true
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                    monthDragOffset = CGFloat(direction) * -containerWidth
+                } completion: {
+                    month = CalendarUtils.addMonths(direction, to: month)
+                    monthDragOffset = 0
+                    isSettling = false
                 }
             }
     }
@@ -224,18 +227,20 @@ struct RootView: View {
                              eventsByDay: eventsByDay,
                              holidays: holidayRegistry.statuses,
                              availableSize: availableSize,
+                             pulseKey: pulseKey,
+                             pulseID: pulseToken,
+                             zoomNamespace: zoomNamespace,
                              onSelect: { date in
+                                 // 只更新选中日期：点中非本月日格也**不切换月视图**，
+                                 // 画布就在本页弹出（spec 交互诉求）。
                                  selectedDate = date
-                                 if !CalendarUtils.isSameDay(CalendarUtils.startOfMonth(date), CalendarUtils.startOfMonth(month)) {
-                                     month = CalendarUtils.startOfMonth(date)
-                                 }
                              },
                              onOpen: { date in openDay(date, pageIndex: 0) })
     }
 
     // MARK: - 顶栏
 
-    private var headerBar: some View {
+    private func headerBar(containerWidth: CGFloat) -> some View {
         HStack(spacing: 12) {
             HStack(spacing: 4) {
                 Button {
@@ -262,9 +267,7 @@ struct RootView: View {
             }
 
             Button("今天") {
-                let now = Date()
-                month = CalendarUtils.startOfMonth(now)
-                selectedDate = now
+                goToToday(containerWidth: containerWidth)
             }
             .font(.system(size: 13, weight: .medium))
             .buttonStyle(.bordered)
@@ -330,6 +333,8 @@ struct RootView: View {
             } label: {
                 Label("管理维度与订阅…", systemImage: "slider.horizontal.3")
             }
+            Divider()
+            Text("版本 \(AppVersion.display)")
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "square.stack.3d.up")
@@ -347,8 +352,52 @@ struct RootView: View {
     // MARK: - 行为
 
     private func shiftMonth(_ delta: Int) {
+        guard !isSettling else { return }
+        isSettling = true
         withAnimation(.easeInOut(duration: 0.22)) {
             month = CalendarUtils.addMonths(delta, to: month)
+        } completion: {
+            isSettling = false
+        }
+    }
+
+    /// 「今天」定位：分「非本月」与「本月」两条动画路径。
+    private func goToToday(containerWidth: CGFloat) {
+        let today = Date()
+        let todayMonth = CalendarUtils.startOfMonth(today)
+        let key = CalendarUtils.key(for: today)
+
+        if CalendarUtils.isSameDay(todayMonth, month) {
+            // 情况 A：今天就在当前月 → 只做选中动画 + 脉冲高亮
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                selectedDate = today
+            }
+            triggerPulse(key)
+            return
+        }
+
+        // 情况 B：今天在其它月 → 用翻月平移动画切过去，落位后高亮
+        guard !isSettling else { return }
+        let forward = todayMonth > month
+        isSettling = true
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            monthDragOffset = forward ? -containerWidth : containerWidth
+        } completion: {
+            month = todayMonth
+            monthDragOffset = 0
+            isSettling = false
+            selectedDate = today
+            triggerPulse(key)
+        }
+    }
+
+    private func triggerPulse(_ key: String) {
+        pulseToken &+= 1
+        pulseKey = key
+        let token = pulseToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            if pulseToken == token { pulseKey = nil }
         }
     }
 
@@ -356,10 +405,9 @@ struct RootView: View {
         let target = workspace ?? repository.ensureDefaultWorkspace()
         guard let record = repository.day(for: date, workspace: target, create: true) else { return }
         selectedDate = date
-        if !CalendarUtils.isSameDay(CalendarUtils.startOfMonth(date), CalendarUtils.startOfMonth(month)) {
-            month = CalendarUtils.startOfMonth(date)
-        }
-        editorRequest = EditorRequest(day: record, pageIndex: pageIndex)
+        // 注意：不切换月视图 —— 点选相邻月的日格时，画布应在**本页**弹出。
+        let sourceID = "\(CalendarUtils.key(for: CalendarUtils.startOfMonth(month)))|\(CalendarUtils.key(for: date))"
+        editorRequest = EditorRequest(day: record, pageIndex: pageIndex, sourceID: sourceID)
     }
 
     private func bootstrap() async {

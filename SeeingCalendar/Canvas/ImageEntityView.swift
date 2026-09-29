@@ -15,6 +15,7 @@ final class ImageEntityView: UIImageView {
     var onSelect: ((ImageEntityView) -> Void)?
     var onBeginMove: ((ImageEntityView) -> Void)?
     var onTransformChanged: ((ImageEntityView) -> Void)?
+    var onEndMove: ((ImageEntityView) -> Void)?
 
     private let sourceImage: UIImage
     private var gestureBase: CGAffineTransform?
@@ -92,6 +93,14 @@ final class ImageEntityView: UIImageView {
         applyWorldTransform()
     }
 
+    /// 选中态临时高亮（不改变任何几何，纯视觉提示）。
+    func setHighlighted(_ highlighted: Bool) {
+        layer.shadowColor = UIColor.systemBlue.cgColor
+        layer.shadowOpacity = highlighted ? 0.55 : 0
+        layer.shadowRadius = highlighted ? 10 : 0
+        layer.shadowOffset = .zero
+    }
+
     /// 世界坐标系（父视图坐标系）中的可见四角。
     var worldQuad: [CGPoint] {
         guard let parent = superview else { return [] }
@@ -154,7 +163,7 @@ final class ImageEntityView: UIImageView {
         case .ended, .cancelled, .failed:
             gestureBase = nil
             gestureStartPoint = nil
-            onTransformChanged?(self)
+            onEndMove?(self)
         default:
             break
         }

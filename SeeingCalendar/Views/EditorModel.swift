@@ -57,7 +57,8 @@ final class EditorModel {
     var replaceTargetID: UUID?
     var note: String
 
-    var activeTool: CanvasTool = .pen {
+    /// nil = 导航态（未选中任何工具，只平移缩放）。
+    var activeTool: CanvasTool? = .pen {
         didSet { toolNeedsApply = true }
     }
     var penColorHex: String = "#1F6FB2" {
@@ -147,6 +148,11 @@ final class EditorModel {
 
     private func applyTool(on host: CanvasHostView) {
         let color = UIColor(hex: penColorHex) ?? .label
+        guard let activeTool else {
+            host.setNavigationMode(true)
+            return
+        }
+        host.setNavigationMode(false)
         switch activeTool {
         case .pen:
             host.setTool(PKInkingTool(.pen, color: color, width: penWidth))
@@ -309,13 +315,17 @@ final class EditorModel {
         canvasHost?.zoomToFit(animated: true)
     }
 
-    /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥。
+    /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
     func select(tool: CanvasTool) {
-        activeTool = tool
         if isLassoActive {
             isLassoActive = false
         }
+        activeTool = (activeTool == tool) ? nil : tool
+        toolNeedsApply = true
     }
+
+    /// 是否处于「无工具 / 导航」状态。
+    var isNavigating: Bool { activeTool == nil }
 
     /// 套索 —— 与笔墨工具互斥。
     func toggleLasso() {

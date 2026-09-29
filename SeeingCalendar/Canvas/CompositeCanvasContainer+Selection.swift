@@ -27,6 +27,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         selectedStrokes = []
         isGroupTransforming = false
         croppingImageID = nil
+        elevateSelection()
         notifySelection()
     }
 
@@ -50,6 +51,8 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             setDrawing(mutable)
             showFloatingPreview()
         }
+        // 选中态临时置顶：贴图浮到笔迹之上，取消选中后自动归位。
+        elevateSelection()
         notifySelection()
     }
 
@@ -62,6 +65,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             setDrawing(drawing)
         }
         removeFloatingPreview()
+        releaseElevatedSelection()
         selectedImageIDs = []
         isGroupTransforming = false
         croppingImageID = nil
@@ -83,13 +87,14 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         selectedStrokes = []
         selectedImageIDs = []
         isGroupTransforming = false
-        isHandleDragging = false
+        isAdjustingSelection = false
         croppingImageID = nil
         cropBase = nil
         gestureBaseTransform = nil
         groupAccumulatedDelta = nil
         groupBaseTransforms = [:]
         removeFloatingPreview()
+        releaseElevatedSelection()
         selectionKind = .none
         selectionOverlay.update(mode: .none)
     }
@@ -125,8 +130,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     func refreshSelectionOverlay() {
         let mode = overlayMode()
-        if isHandleDragging {
-            // 拖拽过程中只更新几何，绝不重建手柄 —— 否则进行中的手势会被立即打断。
+        if isAdjustingSelection {
+            // 拖拽（手柄 / 贴图位移 / 整体变换）过程中只更新几何：
+            // 既不重建手柄（会打断进行中的手势），也不重弹菜单（避免每帧弹窗的 CPU 尖峰）。
             selectionOverlay.updateGeometry(mode)
         } else if selectionOverlay.mode != mode {
             selectionOverlay.update(mode: mode)
@@ -208,7 +214,8 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                           state: UIGestureRecognizer.State) {
         switch state {
         case .began:
-            isHandleDragging = true
+            isAdjustingSelection = true
+            selectionOverlay.dismissMenu()
             beginHandleGesture(kind, point: point)
         case .changed:
             updateHandleGesture(kind, point: point)
@@ -267,7 +274,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func endHandleGesture(_ kind: SelectionHandleKind) {
-        isHandleDragging = false
+        isAdjustingSelection = false
         switch kind {
         case .imageCorner, .imageRotate:
             isGroupTransforming = false

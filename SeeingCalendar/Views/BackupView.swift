@@ -65,6 +65,14 @@ struct BackupView: View {
     private var statusSection: some View {
         Section {
             HStack {
+                Label("版本", systemImage: "number")
+                    .font(.system(size: 13))
+                Spacer()
+                Text(AppVersion.display)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
                 Label(coordinator.statusText.isEmpty ? "就绪" : coordinator.statusText,
                       systemImage: coordinator.isWorking ? "arrow.triangle.2.circlepath" : "checkmark.seal")
                     .font(.system(size: 13))

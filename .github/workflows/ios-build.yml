@@ -41,6 +41,7 @@ jobs:
       - name: Build (Release, unsigned)
         run: |
           set -o pipefail
+          # BUILD 号 = Actions run number，保证每个产物都能追溯到具体构建
           xcodebuild \
             -project "${APP_NAME}.xcodeproj" \
             -scheme "${APP_NAME}" \
@@ -48,11 +49,18 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             build 2>&1 | tee build.log
+
+      - name: Report version
+        if: success()
+        run: |
+          plutil -p "build/Build/Products/Release-iphoneos/${APP_NAME}.app/Info.plist" \
+            | grep -E "CFBundleShortVersionString|CFBundleVersion" || true
 
       - name: Show compiler diagnostics
         if: failure()
