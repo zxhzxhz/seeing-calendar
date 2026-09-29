@@ -324,7 +324,6 @@ struct DayEditorView: View {
     }
 
     @ViewBuilder
-    @ViewBuilder
     private func contextualActions(model: EditorModel) -> some View {
         switch model.selectionKind {
         case .cropping:
