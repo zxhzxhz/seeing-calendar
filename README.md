@@ -119,6 +119,20 @@ ICS 日程相应降级为微胶囊 → 彩点 → 单微点，手绘始终占据
 4. **ICS**：覆盖 `DAILY/WEEKLY(+BYDAY)/MONTHLY/YEARLY` + `INTERVAL/COUNT/UNTIL/EXDATE`；
    `BYSETPOS` 等复杂规则退化为首次发生，不做过度工程。
 5. **未签名 ipa**：CI 无证书，构建时显式 `CODE_SIGNING_ALLOWED=NO`，交付物需自行签名安装。
+6. **极小格触控**：Slide Over（1/3 分屏）下 LOD1 单格约 45pt，目前依靠整格 `contentShape` 热区 + 双击进全屏编辑；
+   spec 4.3 建议的气泡放大镜（Popover Preview）未实现，避免引入额外的预览合成开销。
+7. **节假日班/休**：严格按 spec 只交付 `HolidayProviderProtocol` 协议抽象 + `HolidayRegistry` 注入点 +
+   UI 锚点（日历格内的红/灰角标），无内置年度数据（可由远端配置随时注入）。
+
+## 7. 验证手段（无 macOS 设备下的可验证性边界）
+
+| 环节 | 手段 | 结果 |
+| :--- | :--- | :--- |
+| 编译 / 链接 / 打包 | GitHub Actions macOS runner + `xcodebuild`（Release, iOS SDK） | ✅ 0 error 0 warning |
+| 产物结构 | `zipfile` + `plistlib` 解包 ipa 校验 UTI / 方向 / 权限文案 / Bundle ID | ✅ 见 `artifacts/` |
+| `.vcal` 容器格式 | `scripts/verify_vcal_layout.py` 按 Swift 写入布局重建 → 标准 ZIP 读取器解析 | ✅ 通过 |
+| Swift 机械体检 | `scripts/swift_lint.py`（括号平衡 / 重复声明） | ✅ 通过 |
+| 运行时行为（手势 / PencilKit / SwiftData） | **需真机** | ⚠️ 待上机验收 |
 
 ## 6. 本地（macOS）直接构建
 

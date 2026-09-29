@@ -78,7 +78,8 @@ struct RootView: View {
                           workspace: workspace ?? request.day.workspace ?? repository.ensureDefaultWorkspace(),
                           context: context,
                           initialPageIndex: request.pageIndex,
-                          isFingerDrawingEnabled: fingerDrawingEnabled)
+                          isFingerDrawingEnabled: fingerDrawingEnabled,
+                          onFingerDrawingChanged: { fingerDrawingEnabled = $0 })
         }
         .sheet(isPresented: $showSubscriptions) {
             SubscriptionsView(eventStore: eventStore) {

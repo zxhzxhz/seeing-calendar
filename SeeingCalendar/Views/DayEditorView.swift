@@ -11,6 +11,8 @@ struct DayEditorView: View {
     let context: ModelContext
     let initialPageIndex: Int
     let isFingerDrawingEnabled: Bool
+    /// 编辑器内的触控模式切换会回写为全局默认值。
+    let onFingerDrawingChanged: (Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: EditorModel?
@@ -56,6 +58,9 @@ struct DayEditorView: View {
             .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent(model: model) }
+            .onChange(of: model.isFingerDrawingEnabled) { _, newValue in
+                onFingerDrawingChanged(newValue)
+            }
             .onDisappear { model.finishEditing() }
         }
         .photosPicker(isPresented: photoPickerBinding(model: model), selection: $photoItem, matching: .images)
