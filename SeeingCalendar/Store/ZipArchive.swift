@@ -28,7 +28,7 @@ enum ZipArchiveError: LocalizedError {
 // MARK: - CRC32
 
 enum CRC32 {
-    nonisolated(unsafe) private static let table: [UInt32] = {
+    private static let table: [UInt32] = {
         (0..<256).map { index -> UInt32 in
             var value = UInt32(index)
             for _ in 0..<8 {
@@ -116,7 +116,7 @@ struct ZipWriter {
             try manager.removeItem(at: destination)
         }
         guard manager.createFile(atPath: destination.path, contents: nil),
-              let handle = try? FileHandle(forWritingAtPath: destination.path) else {
+              let handle = FileHandle(forWritingAtPath: destination.path) else {
             throw ZipArchiveError.io("无法创建 \(destination.lastPathComponent)")
         }
         defer { try? handle.close() }
@@ -229,10 +229,15 @@ struct ZipWriter {
 
     private static func dosTimestamp(_ date: Date) -> (time: UInt16, date: UInt16) {
         let parts = CalendarUtils.calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
-        let year = max(1980, parts.year ?? 1980)
-        let dosTime = UInt16((parts.hour ?? 0) << 11 | (parts.minute ?? 0) << 5 | ((parts.second ?? 0) / 2))
-        let dosDate = UInt16(((year - 1980) << 9) | ((parts.month ?? 1) << 5) | (parts.day ?? 1))
-        return (dosTime, dosDate)
+        let year: Int = max(1980, parts.year ?? 1980)
+        let hour: Int = parts.hour ?? 0
+        let minute: Int = parts.minute ?? 0
+        let second: Int = (parts.second ?? 0) / 2
+        let month: Int = parts.month ?? 1
+        let day: Int = parts.day ?? 1
+        let timeValue: Int = (hour << 11) | (minute << 5) | second
+        let dateValue: Int = ((year - 1980) << 9) | (month << 5) | day
+        return (UInt16(truncatingIfNeeded: timeValue), UInt16(truncatingIfNeeded: dateValue))
     }
 }
 

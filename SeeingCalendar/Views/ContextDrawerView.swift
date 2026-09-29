@@ -28,7 +28,7 @@ struct ContextDrawerView: View {
             await loadThumbnails()
         }
         .onAppear { note = record?.note ?? "" }
-        .onChange(of: record?.uuid) { _, _ in note = record?.note ?? "" }
+        .onChange(of: record?.key) { _, _ in note = record?.note ?? "" }
     }
 
     private var header: some View {

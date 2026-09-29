@@ -30,6 +30,11 @@ extension CGAffineTransform {
     var rotationAngle: CGFloat { atan2(b, a) }
 
     var uniformScale: CGFloat { (abs(a) + abs(d)) / 2 }
+
+    /// 对点应用变换（与 `CGPoint.applying(_:)` 语义一致的表达式写法）。
+    func applied(to point: CGPoint) -> CGPoint {
+        point.applying(self)
+    }
 }
 
 enum CanvasGeometry {

@@ -82,7 +82,7 @@ struct SubscriptionsView: View {
                             let name = workspaceName.trimmingCharacters(in: .whitespaces)
                             guard !name.isEmpty else { return }
                             let repository = PageRepository(context: context)
-                            repository.createWorkspace(named: name)
+                            _ = repository.createWorkspace(named: name)
                             workspaceName = ""
                             onWorkspacesChanged()
                         }

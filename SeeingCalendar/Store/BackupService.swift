@@ -104,7 +104,6 @@ final class BackupCoordinator {
     func makeRequest(context: ModelContext, reason: SnapshotReason) -> BackupRequest {
         let workspaces = (try? context.fetch(FetchDescriptor<Workspace>(sortBy: [SortDescriptor(\.sortIndex)]))) ?? []
         let days = (try? context.fetch(FetchDescriptor<DayRecord>())) ?? []
-        let pages = (try? context.fetch(FetchDescriptor<DrawingPage>())) ?? []
         let subscriptions = (try? context.fetch(FetchDescriptor<ICSSubscription>())) ?? []
 
         var database = BackupDatabase()
