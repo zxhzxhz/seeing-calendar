@@ -21,7 +21,7 @@ final class CompositeCanvasContainerView: UIView {
     var onHistoryChange: ((Bool, Bool) -> Void)?
     var onRequestImageReplace: ((UUID) -> Void)?
 
-    private(set) var imageViews: [ImageEntityView] = []
+    var imageViews: [ImageEntityView] = []
 
     // 历史栈
     private var history: [CanvasSnapshot] = []

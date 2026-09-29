@@ -170,7 +170,7 @@ final class SelectionOverlayView: UIView {
         guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else {
             if lastPresentedTag != -1 {
                 lastPresentedTag = -1
-                editMenu.dismissEditMenu(animated: true)
+                editMenu.dismissMenu()
             }
             return
         }
@@ -182,7 +182,7 @@ final class SelectionOverlayView: UIView {
         if force {
             // 形态切换（例如“裁剪”进入二级状态）时旧菜单仍在退场动画中，
             // 立即重新呈现会被系统忽略，因此先收起、再等一拍后呈现。
-            editMenu.dismissEditMenu(animated: false)
+            editMenu.dismissMenu()
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(160))
                 guard let self, self.lastPresentedTag == tag else { return }
@@ -331,30 +331,35 @@ final class SelectionOverlayView: UIView {
 // MARK: - 原生菜单数据源
 
 extension SelectionOverlayView: UIEditMenuInteractionDelegate {
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                             menuFor configuration: UIEditMenuConfiguration,
-                             suggestedActions: [UIMenuElement]) -> UIMenu? {
-        guard !menuActions.isEmpty else { return nil }
-        let single = mode.isSingleImage
-        let children = menuActions.map { action -> UIAction in
-            UIAction(title: action.title(singleImage: single),
-                     image: UIImage(systemName: action.symbol)) { [weak self] _ in
-                guard let self else { return }
-                self.delegate?.selectionOverlay(self, didSelect: action)
+    nonisolated func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                         menuFor configuration: UIEditMenuConfiguration,
+                                         suggestedActions: [UIMenuElement]) -> UIMenu? {
+        // UIKit 保证在主线程回调，这里显式声明隔离域以满足 Swift 6 严格并发。
+        MainActor.assumeIsolated {
+            guard !menuActions.isEmpty else { return nil }
+            let single = mode.isSingleImage
+            let children = menuActions.map { action -> UIAction in
+                UIAction(title: action.title(singleImage: single),
+                         image: UIImage(systemName: action.symbol)) { [weak self] _ in
+                    guard let self else { return }
+                    self.delegate?.selectionOverlay(self, didSelect: action)
+                }
             }
+            return UIMenu(title: "", children: children)
         }
-        return UIMenu(title: "", children: children)
     }
 
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                             targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        switch mode {
-        case .composite(let rect), .compositeTransform(let rect):
-            return rect
-        case .image(let quad), .cropping(let quad):
-            return CanvasGeometry.boundingBox(quad)
-        case .none:
-            return .zero
+    nonisolated func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                         targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        MainActor.assumeIsolated {
+            switch mode {
+            case .composite(let rect), .compositeTransform(let rect):
+                return rect
+            case .image(let quad), .cropping(let quad):
+                return CanvasGeometry.boundingBox(quad)
+            case .none:
+                return .zero
+            }
         }
     }
 }
