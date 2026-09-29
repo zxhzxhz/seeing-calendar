@@ -42,11 +42,12 @@ extension CGAffineTransform {
     func applyingWorldDelta(_ delta: CGAffineTransform) -> CGAffineTransform { concatenating(delta) }
     func applyingLocalDelta(_ delta: CGAffineTransform) -> CGAffineTransform { delta.concatenating(self) }
 
-    /// UIView.transform 绕自身中心施加，赋值世界 delta 时需共轭校正。
+    /// UIView.transform 绕自身中心施加：effective = T(c) ∘ transform ∘ T(-c)（函数序）。
+    /// 要令 effective == delta，必须赋值 T(c) → delta → T(-c)。
     func viewConjugate(aboutCenter center: CGPoint) -> CGAffineTransform {
-        CGAffineTransform(translationX: -center.x, y: -center.y)
+        CGAffineTransform(translationX: center.x, y: center.y)
             .concatenating(self)
-            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+            .concatenating(CGAffineTransform(translationX: -center.x, y: -center.y))
     }
 }
 
@@ -204,22 +205,46 @@ for (sx, sy) in [(CGFloat(1.5), CGFloat(1.5)), (0.6, 0.6), (1.2, 1.2)] {
     expect(approx(anchorAfter, groupAnchor), "组锚点应是不动点，实际 \(fmt(anchorAfter))")
 }
 
-// MARK: - 5. 浮动预览：UIView.transform 的共轭校正
+// MARK: - 5. 浮动笔迹预览：UIView 绕中心施加的共轭校正
 
 print("\n=== 5. 浮动笔迹预览：UIView 中心原点校正 ===")
-for scale in [CGFloat(0.5), 1.0, 2.0] {
-    let previewCenter = CGPoint(x: 640, y: 470)          // 预览视图中心（父视图坐标系）
-    let previewFrameLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
-    for delta in [CGAffineTransform.worldScale(anchor: groupAnchor, sx: 1.4, sy: 1.4),
-                  CGAffineTransform.worldRotation(center: groupAnchor, angle: 40 * .pi / 180)] {
-        // 直接赋值 delta：有效变换 = T(c) · delta · T(-c)，与期望的世界 delta 不等价
-        let naive = delta.viewConjugate(aboutCenter: previewCenter)   // 校正后赋值给 view.transform
-        let effective = CGAffineTransform(translationX: previewCenter.x, y: previewCenter.y)
-            .concatenating(naive)
-            .concatenating(CGAffineTransform(translationX: -previewCenter.x, y: -previewCenter.y))
-        _ = scale
-        expect(approx(previewFrameLocal.applying(effective), previewFrameLocal.applying(delta)),
-               "校正后预览的有效世界变换应等于 delta，实际 \(fmt(previewFrameLocal.applying(effective))) 期望 \(fmt(previewFrameLocal.applying(delta)))")
+let previewCenter = CGPoint(x: 640, y: 470)          // 预览视图中心（父视图坐标系）
+let previewFrameLocal = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+let deltasForPreview = [CGAffineTransform.worldScale(anchor: groupAnchor, sx: 1.4, sy: 1.4),
+                        CGAffineTransform.worldRotation(center: groupAnchor, angle: 40 * .pi / 180)]
+
+for delta in deltasForPreview {
+    // UIKit 语义：有效映射 = T(c) ∘ transform ∘ T(-c)；用 concatenating 表达即 T(-c) → transform → T(c)
+    let assigned = delta.viewConjugate(aboutCenter: previewCenter)
+    let effective = CGAffineTransform(translationX: -previewCenter.x, y: -previewCenter.y)
+        .concatenating(assigned)
+        .concatenating(CGAffineTransform(translationX: previewCenter.x, y: previewCenter.y))
+    expect(approx(previewFrameLocal.applying(effective), previewFrameLocal.applying(delta)),
+           "预览的有效世界变换应等于 delta：实际 \(fmt(previewFrameLocal.applying(effective))) 期望 \(fmt(previewFrameLocal.applying(delta)))")
+
+    // 再取几个点交叉验证（不能只在一点上碰巧相等）
+    for probe in [CGPoint(x: 0, y: 0), CGPoint(x: 37, y: -91), CGPoint(x: 260, y: 180)] {
+        expect(approx(probe.applying(effective), probe.applying(delta), tolerance: 0.01),
+               "校正后预览在 \(fmt(probe)) 处应与 delta 一致")
+    }
+}
+
+// MARK: - 6. 图元视图分解（center + 线性变换）自检
+
+print("\n=== 6. 图元 center+transform 分解等价性 ===")
+for scale in [CGFloat(0.3), 1.0, 2.2] {
+    for rotation in [CGFloat(0), 33, -75] {
+        let matrix = makeBase(scale: scale, rotationDegrees: rotation, position: CGPoint(x: 420, y: 310))
+        let boundsCenter = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+        let center = boundsCenter.applying(matrix)                    // 视图 center
+        let linear = CGAffineTransform(a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d, tx: 0, ty: 0)
+        let effective = CGAffineTransform(translationX: -boundsCenter.x, y: -boundsCenter.y)
+            .concatenating(linear)
+            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+        for probe in [CGPoint(x: 0, y: 0), CGPoint(x: -40, y: 90), CGPoint(x: viewport.width, y: viewport.height)] {
+            expect(approx(probe.applying(effective), probe.applying(matrix), tolerance: 0.01),
+                   "scale=\(scale) rot=\(rotation)°: 分解后 \(fmt(probe)) 应映射到 \(fmt(probe.applying(matrix)))，实际 \(fmt(probe.applying(effective)))")
+        }
     }
 }
 

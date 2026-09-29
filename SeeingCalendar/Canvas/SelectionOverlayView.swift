@@ -123,8 +123,9 @@ final class SelectionOverlayView: UIView {
     /// 关键：先让子视图出手（手柄 / 菜单 / 内部拖动区），**即使处于套索模式**；
     /// 都未命中时才由覆盖层自己接管套索。否则套索模式下手柄永远点不到。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // 手柄的 44pt 判定区在小图上会互相重叠，此时必须按「离哪个手柄中心最近」来裁决，
-        // 否则会点到相邻手柄（表现为“拖角手柄却只动了一个边”）。
+        // 手柄的 44pt 判定区在小图上会互相重叠，此时必须按「离哪个手柄中心最近」来裁决。
+        // 关键：手柄必须**立即胜出**，不能被下层的内部拖动区接管
+        // （此前先收集手柄再继续扫描，底层 interiorView 会把触摸抢走 → 表现为「只有右下角手柄有作用」）。
         var nearestHandle: (view: SelectionHandleView, distance: CGFloat)?
         for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
             let local = convert(point, to: subview)
@@ -136,6 +137,7 @@ final class SelectionOverlayView: UIView {
                 }
                 continue
             }
+            if let nearestHandle { return nearestHandle.view }
             if let hit = subview.hitTest(local, with: event) { return hit }
         }
         if let nearestHandle { return nearestHandle.view }
@@ -156,6 +158,21 @@ final class SelectionOverlayView: UIView {
             if subview.point(inside: convert(point, to: subview), with: nil) { return true }
         }
         return false
+    }
+
+    /// 只判定手柄/菜单（**不含**内部拖动区）：用于区分「点在手柄上」与「点在选区内」。
+    func hitsHandleOrMenu(_ point: CGPoint) -> Bool {
+        for subview in subviews where !subview.isHidden && subview.alpha > 0.01 && subview !== interiorView {
+            if subview.point(inside: convert(point, to: subview), with: nil) { return true }
+        }
+        return false
+    }
+
+    /// 重新弹出菜单（用户再次点按选区时使用）。
+    func presentMenu() {
+        guard !menuActions.isEmpty else { return }
+        lastPresentedTag = -1
+        syncEditMenu(force: true)
     }
 
     // MARK: - 外部查询与控制

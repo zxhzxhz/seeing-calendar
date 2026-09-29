@@ -52,12 +52,19 @@ extension CGAffineTransform {
         delta.concatenating(self)
     }
 
-    /// 让 `UIView.transform` 在父视图坐标系下等价于世界变换 `delta`
-    /// （UIView 的 transform 是以视图中心为原点施加的，需做一次共轭校正）。
+    /// 让 `UIView.transform` 在父视图坐标系下等价于世界变换 `delta`。
+    ///
+    /// UIView 的 transform 是**绕视图中心**施加的，即有效映射为
+    ///     effective = T(c) ∘ transform ∘ T(-c)        （函数序）
+    /// 要令 effective == delta，必须赋值为
+    ///     transform = T(c) ∘ delta ∘ T(-c)
+    /// 用 concatenating（a.concatenating(b) = 先 a 后 b）表达即：T(c) → delta → T(-c)。
+    /// 注意符号方向：写成 T(-c) → delta → T(c) 会把不动点镜像到错误一侧
+    /// （表现为「十字画在中心，但内容绕着别处缩放/旋转」）。
     func viewConjugate(aboutCenter center: CGPoint) -> CGAffineTransform {
-        CGAffineTransform(translationX: -center.x, y: -center.y)
+        CGAffineTransform(translationX: center.x, y: center.y)
             .concatenating(self)
-            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+            .concatenating(CGAffineTransform(translationX: -center.x, y: -center.y))
     }
 }
 

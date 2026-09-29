@@ -216,15 +216,27 @@ final class CompositeCanvasContainerView: UIView {
         // 菜单退场时可能把触摸透传下来，否则会立刻把刚建立的选择清掉（表现为“变形点了没反应”）。
         if Date() < menuActionGuardUntil { return }
 
-        // 落在选区手柄 / 原生菜单 / 内部拖动区：不参与“点空白取消选择”
-        if selectionOverlay.hitsInteractiveElement(point) { return }
-        // 落在选区内部：同样保持选中（取消选中只发生在点选区之外时）
-        if selectionOverlay.containsSelection(point) { return }
+        // 1) 手柄 / 浮动菜单：交给它们自己处理
+        if selectionOverlay.hitsHandleOrMenu(point) { return }
 
-        // 落在贴图上：交给贴图自身的点选逻辑
+        // 2) 点在贴图上：无论当前处于套索态还是变形态，都应能选中该贴图。
+        //    （变形态下触摸会被"内部拖动区"接管，贴图自身的点按手势收不到事件，
+        //      因此这里由容器代劳选中，并重新弹出菜单。）
         for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
-            if entity.bounds.contains(entity.convert(point, from: self)) { return }
+            if entity.bounds.contains(entity.convert(point, from: self)) {
+                selectImage(id: entity.itemID, additive: false)
+                selectionOverlay.presentMenu()
+                return
+            }
         }
+
+        // 3) 点在选区内（非贴图、非手柄）：保持选中并重新弹出菜单
+        if selectionOverlay.containsSelection(point) {
+            selectionOverlay.presentMenu()
+            return
+        }
+
+        // 4) 点在选区之外：取消选中
         if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
             clearSelection()
         }
