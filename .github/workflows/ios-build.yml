@@ -35,6 +35,9 @@ jobs:
           if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
           xcodegen --version
 
+      - name: Verify canvas transform math (real CoreGraphics)
+        run: swift scripts/verify_transform_math.swift
+
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
