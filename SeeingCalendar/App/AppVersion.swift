@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// 版本信息（由 Xcode 构建设置注入：MARKETING_VERSION / CURRENT_PROJECT_VERSION）。
 enum AppVersion {
