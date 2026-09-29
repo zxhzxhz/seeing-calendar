@@ -244,7 +244,7 @@ struct RootView: View {
         HStack(spacing: 12) {
             HStack(spacing: 4) {
                 Button {
-                    shiftMonth(-1)
+                    shiftMonth(-1, containerWidth: containerWidth)
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 14, weight: .semibold))
@@ -257,7 +257,7 @@ struct RootView: View {
                     .frame(minWidth: 118, alignment: .center)
 
                 Button {
-                    shiftMonth(1)
+                    shiftMonth(1, containerWidth: containerWidth)
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .semibold))
@@ -351,12 +351,15 @@ struct RootView: View {
 
     // MARK: - 行为
 
-    private func shiftMonth(_ delta: Int) {
+    /// 箭头翻月走与手势翻月完全相同的平移动画，避免「硬切」观感。
+    private func shiftMonth(_ delta: Int, containerWidth: CGFloat) {
         guard !isSettling else { return }
         isSettling = true
-        withAnimation(.easeInOut(duration: 0.22)) {
-            month = CalendarUtils.addMonths(delta, to: month)
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            monthDragOffset = CGFloat(delta) * -containerWidth
         } completion: {
+            month = CalendarUtils.addMonths(delta, to: month)
+            monthDragOffset = 0
             isSettling = false
         }
     }
