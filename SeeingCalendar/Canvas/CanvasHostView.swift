@@ -1,0 +1,100 @@
+import PencilKit
+import UIKit
+
+/// 画布宿主：外层统一缩放/平移（两层共享同一世界坐标系，几何永不错位）。
+@MainActor
+final class CanvasHostView: UIView, UIScrollViewDelegate {
+    let scrollView = UIScrollView()
+    let canvas: CompositeCanvasContainerView
+
+    private var didPerformInitialFit = false
+
+    override init(frame: CGRect) {
+        canvas = CompositeCanvasContainerView(frame: CGRect(origin: .zero,
+                                                            size: CompositeCanvasContainerView.canvasSize))
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setup() {
+        backgroundColor = .secondarySystemBackground
+
+        scrollView.delegate = self
+        scrollView.minimumZoomScale = 0.15
+        scrollView.maximumZoomScale = 3.0
+        scrollView.bouncesZoom = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.decelerationRate = .fast
+        scrollView.delaysContentTouches = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.panGestureRecognizer.minimumNumberOfTouches = 2
+        addSubview(scrollView)
+
+        canvas.frame = CGRect(origin: .zero, size: CompositeCanvasContainerView.canvasSize)
+        scrollView.addSubview(canvas)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        scrollView.frame = bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        if !didPerformInitialFit {
+            didPerformInitialFit = true
+            zoomToFit(animated: false)
+        } else {
+            updateInsets()
+        }
+    }
+
+    // MARK: - 缩放
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { canvas }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        updateInsets()
+        canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+    }
+
+    func zoomToFit(animated: Bool = false) {
+        let available = bounds.size
+        guard available.width > 1, available.height > 1 else { return }
+        let fit = min(available.width / canvas.bounds.width, available.height / canvas.bounds.height)
+        let target = max(scrollView.minimumZoomScale, min(scrollView.maximumZoomScale, fit))
+        scrollView.setZoomScale(target, animated: animated)
+        updateInsets()
+        canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+    }
+
+    func zoomIn(animated: Bool = true) {
+        let target = min(scrollView.maximumZoomScale, scrollView.zoomScale * 1.25)
+        scrollView.setZoomScale(target, animated: animated)
+        updateInsets()
+        canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+    }
+
+    func zoomOut(animated: Bool = true) {
+        let target = max(scrollView.minimumZoomScale, scrollView.zoomScale / 1.25)
+        scrollView.setZoomScale(target, animated: animated)
+        updateInsets()
+        canvas.overlayScale = 1 / max(0.05, scrollView.zoomScale)
+    }
+
+    private func updateInsets() {
+        let contentSize = CGSize(width: canvas.bounds.width * scrollView.zoomScale,
+                                 height: canvas.bounds.height * scrollView.zoomScale)
+        let horizontal = max(0, (bounds.width - contentSize.width) / 2)
+        let vertical = max(0, (bounds.height - contentSize.height) / 2)
+        scrollView.contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+    }
+
+    // MARK: - 工具
+
+    func setTool(_ tool: PKTool) {
+        canvas.canvasView.tool = tool
+    }
+}

@@ -1,0 +1,99 @@
+name: iOS Build (unsigned)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP_NAME: SeeingCalendar
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          XCODE_APP=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          echo "Selected: $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i "iphoneos" || true
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (Release, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${APP_NAME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee build.log
+
+      - name: Show compiler diagnostics
+        if: failure()
+        run: |
+          echo "=== errors ==="
+          grep -nE "error:" build.log | sort -u | head -150 || true
+          echo "=== warnings ==="
+          grep -nE "warning:" build.log | sort -u | head -80 || true
+
+      - name: Package unsigned IPA
+        if: success()
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
+          test -d "$APP"
+          rm -rf Payload "${APP_NAME}-unsigned.ipa"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "${APP_NAME}-unsigned.ipa" Payload
+          ls -lh "${APP_NAME}-unsigned.ipa"
+
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeeingCalendar-unsigned-ipa
+          path: SeeingCalendar-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload dSYMs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SeeingCalendar-dSYMs
+          path: build/Build/Products/Release-iphoneos/*.dSYM
+          if-no-files-found: warn
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SeeingCalendar-build-log
+          path: build.log
+          if-no-files-found: warn

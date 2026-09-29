@@ -1,0 +1,18 @@
+# Xcode / build output
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.ipa
+*.app
+*.dSYM/
+build.log
+Payload/
+
+# XcodeGen generates the project from project.yml
+!project.yml
+
+# macOS
+.DS_Store
