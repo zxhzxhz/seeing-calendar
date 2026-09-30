@@ -47,7 +47,7 @@ final class HolidayRegistry {
         let source = BundledHolidayProvider.shared
         source.ensureLoaded()
         var merged: [String: WorkRestStatus] = offDayEnabled ? source.table(for: .offDay).statuses : [:]
-        var labels: [String: String] = offDayEnabled ? source.table(for: .offDay).names : [:]
+        let labels: [String: String] = offDayEnabled ? source.table(for: .offDay).names : [:]
         if makeUpWorkEnabled {
             for (key, status) in source.table(for: .makeUpWork).statuses { merged[key] = status }
         }

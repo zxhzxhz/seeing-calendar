@@ -1,10 +1,48 @@
 # Changelog
 
-## [1.0.17]
+## [1.0.17] — 翻月性能重构 / 内置中国节假日 / 日格三态样式
 
-### 待归档
+### 新增
+- **内置中国大陆假期（两个 ICS 本地凭据，默认开启）**
+  - `holidayCal-HO.ics`（放假 116 条）、`holidayCal-CO.ics`（调休补班 26 条），覆盖 2022–2026，
+    随包发行，冷启动零网络即可正确着色；
+  - 固定 UUID 幂等播种；内置凭据**不可删除**（不想用请关开关）；
+  - 联网更新：jsDelivr 为主 / GitHub raw 为备，校验响应含 `VEVENT`、落盘缓存，失败静默回落本地；
+  - 订阅页新增「中国节假日（内置）」区块：数据来源、覆盖年份、上游更新时间、立即更新按钮；
+  - 取源统一走 `BundledHolidayProvider.effectiveICSURL`，着色与抽屉事件列表严格同源。
+- **日格三态样式**
+  - 放假 / 周末 → 暖色（暖米底 + 焦橙数字 + 节日名角标）；
+  - 普通工作日 / 调休补班 → 中性（冷灰底 + 墨色数字 + 绿色「班」角标）；
+  - 非当月 → 显式色值降级（不用 `opacity` 叠层，避免 42 格各开一层离屏渲染）。
+- **新增门禁** `scripts/verify_holiday_table.swift`（CI 以 `--strict` 执行，25 条断言）：
+  覆盖天数、名称抽取变体、覆盖年份、放假/补班不重叠、时区反例基线。
 
-- （填写本次变更）
+### 优化
+- **翻月滑动性能（根因修复）**
+  - 根因：拖动偏移是 `RootView` 的 `@State` → 每帧重算 `RootView.body` → 3 个月 × 42 格
+    = 126 个 `DayCellView.body` 全量重跑，其中还含 126 个 `ultraThinMaterial` 实时背景模糊；
+  - 改法：① `MonthPagerState`（`@Observable`）独占 offset/手势 → 逐帧只重算 `MonthPager.body`；
+    ② `MonthGridView: Equatable`（O(1) 比较）+ `.equatable()` → 126 个日格 body 一次不重跑，
+    只剩一次 layer transform；③ 去掉日格内全部实时模糊材质，改半透明纯色；
+    ④ 父层预计算 `pagedEvents`（覆盖当月 ±1 的网格日期）与 `monthContentToken`（O(1) 指纹）；
+  - 顺带修掉：脉冲环收尾时 `pulseKey` 置 nil 不参与比较导致定位环永久残留。
+- `scripts/swift_lint.py` 新增 3 条形状门禁（把「10 分钟 CI 才发现」压到 2 秒）：
+  属性写成函数、property wrapper 调用式构造、`EquatableView` 两种错法。
+
+### 修复
+- **调休样式时区错位（真实缺陷）**：补班事件在 ICS 里是浮动时间
+  `DTSTART:20260104T090000`（语义为北京时间），原先按设备时区解释，
+  夏威夷等西部时区用户补班样式整体前移一天。现固定按 CST 解释与取键。
+- **「今天」定位**：残留日视图时代的 `forward ? -width : width`（月视图无正反之分）→
+  改为「恰好相邻月用翻月滑动；跨多月直接重定位 + 脉冲」（跨月滑动会滑到未渲染的空白页）。
+- `CalendarEvent` 补回显式成员初始化（声明了 `init(from:)` 后 Swift 不再合成成员初始化，
+  构造调用被错误解析到 `init(from:)`，报出与真实原因无关的
+  `missing argument for parameter 'from'`）。
+
+### 已知限制
+- 假期样式在「日格」层表达，格内不画假期事件胶囊（避免与手绘争焦点）；
+  假期条目仍完整出现在事件抽屉里。
+- 翻页器只预渲染前后各一个月，跨多月跳转采用重定位而非滑动。
 
 # Changelog
 
