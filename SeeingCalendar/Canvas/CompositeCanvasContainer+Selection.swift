@@ -409,8 +409,12 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         let translation = CGAffineTransform(translationX: base.natural.width * (newCrop.origin.x - base.crop.origin.x),
                                             y: base.natural.height * (newCrop.origin.y - base.crop.origin.y))
         entity.update(cropRect: newCrop, worldTransform: base.transform.applyingLocalDelta(translation))
+        // 只标记"正在裁剪"，**不改 selectionKind**：
+        // 在 .image 态拖边手柄时会隐式进入裁剪，若此刻就把形态切成 .cropping，
+        // 覆盖层会因 shapeTag 变化而重建手柄 → 正在拖拽的手势被移除视图打断
+        // （这正是"第一次只能移动一点就停住，第二次及以后正常"的根因）。
+        // 形态切换统一推迟到 endHandleGesture → notifySelection()，即手指脱离之后。
         croppingImageID = id
-        selectionKind = .cropping(id)
         refreshSelectionOverlay()
     }
 

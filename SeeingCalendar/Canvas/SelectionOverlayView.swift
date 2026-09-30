@@ -532,8 +532,12 @@ final class SelectionOverlayView: UIView {
         let path = lassoPoints
         lassoPoints = []
         lassoLayer.path = nil
-        // 点一下（退化套索）也要上报：仲裁器会给出空结果，容器据此取消选中。
-        delegate?.selectionOverlay(self, didCompleteLasso: path)
+        // 只有真正的套索才上报。退化套索（点一下）不上报：
+        // 否则它会与容器的点按手势（点贴图 → 选中并弹菜单 / 点空白 → 取消选中）产生竞态，
+        // 出现"点选贴图被随后的取消选中吃掉"的现象。
+        if path.count >= 3 {
+            delegate?.selectionOverlay(self, didCompleteLasso: path)
+        }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {

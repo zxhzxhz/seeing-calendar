@@ -200,7 +200,21 @@ final class CompositeCanvasContainerView: UIView {
             return hit
         }
 
-        // 2. 套索模式：由覆盖层接管。
+        // 2. 贴图命中：临时置顶层 → 前置层 → 后置层，逆序遍历保证顶层优先。
+        if let entity = imageEntity(at: point) {
+            // 已选中的贴图：任何模式下（含套索态）都直接交给它 ——
+            // 拖动它就是移动贴图，而不是重新画一个套索。
+            if selectedImageIDs.contains(entity.itemID) {
+                return entity
+            }
+            // 未选中的贴图：非套索态下一律拦截（图片绝对优先，杜绝“选中贴图同时画出污点”）；
+            // 套索态下不拦，交给套索圈选（重叠即选中，见 UnifiedLassoArbitrator）。
+            if !isLassoActive {
+                return entity
+            }
+        }
+
+        // 3. 套索模式：其余区域由覆盖层接管。
         //    「这一下该不该画套索」在 SelectionOverlayView.touchesBegan 里判定 ——
         //    因为 UIEvent.allTouches 在 hitTest 阶段不可靠（初次落笔常常取不到该触摸），
         //    曾经据此分流导致「关闭手指开关后完全无法套索」。
@@ -208,8 +222,13 @@ final class CompositeCanvasContainerView: UIView {
             return selectionOverlay
         }
 
-        // 3. 贴图命中：临时置顶层 → 前置层 → 后置层，逆序遍历保证顶层优先；
-        //    命中即短路 PKCanvasView 的绘制手势，从底座杜绝“选中贴图同时画出污点”。
+        // 4. 空白区域交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
+        guard canvasView.isUserInteractionEnabled else { return nil }
+        return canvasView.hitTest(convert(point, to: canvasView), with: event)
+    }
+
+    /// 命中测试：返回该点最上层的贴图实体（临时置顶层 → 前置层 → 后置层）。
+    func imageEntity(at point: CGPoint) -> ImageEntityView? {
         for container in [selectionTopContainerView, imageFrontContainerView, imageContainerView] {
             for subview in container.subviews.reversed() {
                 guard let entity = subview as? ImageEntityView, !entity.isHidden, entity.alpha > 0.01 else { continue }
@@ -219,10 +238,7 @@ final class CompositeCanvasContainerView: UIView {
                 }
             }
         }
-
-        // 4. 空白区域交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
-        guard canvasView.isUserInteractionEnabled else { return nil }
-        return canvasView.hitTest(convert(point, to: canvasView), with: event)
+        return nil
     }
 
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {
