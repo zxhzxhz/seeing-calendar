@@ -1,10 +1,23 @@
 # Changelog
 
-## [1.0.13]
+## [1.0.13] — 关闭手指开关后无法套索
 
-### 待归档
+### 修复
+- **根因（又一次「未验证的平台假设」）**：`UIEvent.allTouches` 在 `hitTest(_:with:)` 阶段**不可靠**
+  （初次落笔常常取不到该触摸），于是 v1.0.12 的 `touchKind` 返回 `.unknown` →
+  既不走「Pencil 套索」也不走「手指+开关开启套索」分支 → 落到画布分支，
+  而套索态下画布 `isUserInteractionEnabled = false` → **触摸被整体丢弃**。
+  手指开关开启时恰好命中另一条分支，所以只有开关关闭才暴露。
+- **修法**：`hitTest` 只做分层（手柄/菜单/内部拖动区 → 套索态覆盖层接管 → 贴图 → 画布）；
+  触摸类型判定移到 `SelectionOverlayView.touchesBegan`（`UITouch.type` 在该处可靠）；
+  「手指书写」开关下发为 `allowsFingerLasso` —— 手指在 Pencil 独占模式下不产生套索，
+  但触摸仍由覆盖层接收，因此不阻断容器的点选/取消选中，也不阻断双指平移缩放。
 
-- （填写本次变更）
+### 工程防线
+- `scripts/swift_lint.py` 新增「已知陷阱」门禁：`hitTest` 内出现 `allTouches` 即失败，
+  并在 CI 中作为独立步骤执行（与数学门禁同级）。
+- 该门禁已自测：陷阱用例被拦截、合规范例放行（避免出现"永远 pass 的门禁"）。
+
 
 # Changelog
 
