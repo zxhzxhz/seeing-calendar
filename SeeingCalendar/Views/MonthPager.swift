@@ -39,6 +39,19 @@ final class MonthPagerState {
     }
 }
 
+/// 月历单页的等值短路壳。
+///
+/// `EquatableView` 是 **property wrapper**，只能以属性形式使用（`@EquatableView var grid: …`）。
+/// 写成调用式的 `EquatableView { MonthGridView(…) }` 会被解析成「把闭包本身当作内容」：
+/// `Content` 推断成 `() -> MonthGridView`，于是报
+/// `type '() -> MonthGridView' cannot conform to 'Equatable' / 'View'`。
+/// 所以用这层薄壳把属性形式包起来，语义不变：输入未变 → 整棵 42 格子树不重算。
+private struct MonthPage: View {
+    @EquatableView var grid: MonthGridView
+
+    var body: some View { grid }
+}
+
 /// 月历翻页器：左右拖动切换月份，上/下月常驻预渲染。
 ///
 /// 性能约定：
@@ -86,26 +99,20 @@ struct MonthPager: View {
 
     private func page(offset delta: Int) -> some View {
         let target = CalendarUtils.addMonths(delta, to: month)
-        // EquatableView 是 property wrapper，初始化形如 `EquatableView { 内容 }`；
-        // 内容未变时整棵 42 格子树被跳过（只比 O(1) 指纹），拖动时只做 layer transform。
-        return EquatableView {
-            MonthGridView(month: target,
-                          selectedDate: selectedDate,
-                          records: records,
-                          eventsByDay: eventsByDay,
-                          holidays: holidays,
-                          holidayNames: holidayNames,
-                          contentToken: contentToken,
-                          availableSize: availableSize,
-                          pulseKey: pulseKey,
-                          pulseID: pulseID,
-                          zoomNamespace: zoomNamespace,
-                          onSelect: onSelect,
-                          onOpen: onOpen)
-        }
-        // .frame 必须放在 EquatableView **外面**：内容类型要是 MonthGridView 本身，
-        // 因为 ModifiedContent 的 Equatable 一致性还要求那个私有布局类型也是 Equatable。
-        .frame(width: containerWidth)
+        return MonthPage(grid: MonthGridView(month: target,
+                                             selectedDate: selectedDate,
+                                             records: records,
+                                             eventsByDay: eventsByDay,
+                                             holidays: holidays,
+                                             holidayNames: holidayNames,
+                                             contentToken: contentToken,
+                                             availableSize: availableSize,
+                                             pulseKey: pulseKey,
+                                             pulseID: pulseID,
+                                             zoomNamespace: zoomNamespace,
+                                             onSelect: onSelect,
+                                             onOpen: onOpen))
+            .frame(width: containerWidth)
     }
 
     /// 与 iOS 原生桌面翻页一致：位移阈值很低，主要判定依据是**速度**。

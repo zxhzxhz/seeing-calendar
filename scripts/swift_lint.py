@@ -76,6 +76,21 @@ SHAPE_RE = re.compile(
 )
 
 
+#: property wrapper 不能用调用式构造。`EquatableView { Content }` 会被解析成
+#: 「把闭包本身当作内容」，报 `type '() -> X' cannot conform to 'Equatable'`。
+#: 正确写法是属性形式：`@EquatableView var grid: MonthGridView`。
+WRAPPER_CALL_RE = re.compile(r"(?<!@)(?<!\w)\b(EquatableView)\s*\(?\s*\{")
+
+
+def check_wrapper_calls(rel, stripped, problems):
+    for match in WRAPPER_CALL_RE.finditer(stripped):
+        problems.append(
+            f"{rel}: {match.group(1)} 以调用式构造 —— 会被解析成「把闭包当内容」。"
+            "property wrapper 只能用属性形式：`@EquatableView var grid: MonthGridView`"
+            "（必要时用薄壳 View 包一层）。"
+        )
+
+
 def check_shapes(rel, stripped, problems):
     for match in SHAPE_RE.finditer(stripped):
         problems.append(
@@ -118,6 +133,7 @@ def main() -> int:
             declarations[match.group(2)].append(path.name)
         check_pitfalls(str(path.relative_to(root)), stripped, problems)
         check_shapes(str(path.relative_to(root)), stripped, problems)
+        check_wrapper_calls(str(path.relative_to(root)), stripped, problems)
 
     duplicates = {name: where for name, where in declarations.items() if len(where) > 1}
 
