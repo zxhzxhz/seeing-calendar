@@ -24,9 +24,10 @@ final class MonthPagerState {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             offset = target
         } completion: {
+            // 逃逸闭包必须显式 self（Swift 6）
             commit()
-            offset = 0
-            isSettling = false
+            self.offset = 0
+            self.isSettling = false
         }
     }
 
@@ -85,8 +86,9 @@ struct MonthPager: View {
 
     private func page(offset delta: Int) -> some View {
         let target = CalendarUtils.addMonths(delta, to: month)
-        // EquatableView：输入未变时整棵 42 格子树被跳过（O(1) 指纹比较）。
-        EquatableView(
+        // EquatableView 是 property wrapper，初始化形如 `EquatableView { 内容 }`；
+        // 内容未变时整棵 42 格子树被跳过（只比 O(1) 指纹），拖动时只做 layer transform。
+        return EquatableView {
             MonthGridView(month: target,
                           selectedDate: selectedDate,
                           records: records,
@@ -100,7 +102,9 @@ struct MonthPager: View {
                           zoomNamespace: zoomNamespace,
                           onSelect: onSelect,
                           onOpen: onOpen)
-        )
+        }
+        // .frame 必须放在 EquatableView **外面**：内容类型要是 MonthGridView 本身，
+        // 因为 ModifiedContent 的 Equatable 一致性还要求那个私有布局类型也是 Equatable。
         .frame(width: containerWidth)
     }
 

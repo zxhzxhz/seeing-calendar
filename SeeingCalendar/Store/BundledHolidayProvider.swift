@@ -136,9 +136,14 @@ enum HolidayTableBuilder {
 /// 节假日数据源：内置数据 + 可选的联网更新缓存。
 ///
 /// 生命周期：`HolidayRegistry` 在首次 `rebuild` 时触发一次 `ensureLoaded()`（同步读包，< 5 ms）。
+/// 刻意**不**声明 `HolidayProviderProtocol` 一致性：该协议是 `Sendable` 且带非隔离要求，
+/// 而本类型是 `@MainActor`（内部持有 @Observable 状态），两者共存会报
+/// 「一致性跨越到 main actor 隔离代码，可能产生数据竞争」。
+/// 现状：数据只来自随包 ICS + 联网更新，不需要远程月度接口；`HolidayProviderProtocol`
+/// 作为未来远程 Provider 的占位接口原样保留在 `HolidayProvider.swift` 里。
 @MainActor
 @Observable
-final class BundledHolidayProvider: HolidayProviderProtocol {
+final class BundledHolidayProvider {
     static let shared = BundledHolidayProvider()
 
     private(set) var offDayTable = BundledHolidayTable()
@@ -200,8 +205,8 @@ final class BundledHolidayProvider: HolidayProviderProtocol {
     private static func cachedText(for source: BundledHolidaySource) -> String? {
         let url = AppPaths.cacheRoot.appendingPathComponent("holiday-\(source.resourceName).ics")
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let text = String(data: data, encoding: .utf8)
-        return text.isEmpty ? nil : text
+        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return nil }
+        return text
     }
 
     /// **唯一**的 ICS 取源入口：优先上次联网更新落盘的缓存，否则读包内资源。
@@ -241,8 +246,13 @@ final class BundledHolidayProvider: HolidayProviderProtocol {
                         throw NSError(domain: "Holiday", code: http.statusCode,
                                       userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
                     }
-                    let decoded = String(data: data, encoding: .utf8)
-                        ?? String(data: data, encoding: .isoLatin1)
+                    // 两个分支都是 `String?`，所以 `??` 的结果仍是可选；必须用 guard let 拆包。
+                    guard let decoded = String(data: data, encoding: .utf8)
+                        ?? String(data: data, encoding: .isoLatin1),
+                          !decoded.isEmpty else {
+                        throw NSError(domain: "Holiday", code: -2,
+                                      userInfo: [NSLocalizedDescriptionKey: "响应不是可解码的文本"])
+                    }
                     guard decoded.contains("BEGIN:VEVENT") else {
                         throw NSError(domain: "Holiday", code: -1,
                                       userInfo: [NSLocalizedDescriptionKey: "响应不含 VEVENT"])
@@ -278,32 +288,10 @@ final class BundledHolidayProvider: HolidayProviderProtocol {
         return nil
     }
 
-    // MARK: - HolidayProviderProtocol
-
-    func fetchHolidaySchedule(year: Int, month: Int) async throws -> [Date: WorkRestStatus] {
-        ensureLoaded()
-        var result: [Date: WorkRestStatus] = [:]
-        for (key, status) in mergedStatuses() {
-            guard let date = CalendarUtils.date(fromKey: key) else { continue }
-            if CalendarUtils.year(of: date) == year, CalendarUtils.month(of: date) == month {
-                result[date] = status
-            }
-        }
-        return result
-    }
-
-    func queryStatus(for date: Date) -> WorkRestStatus {
-        ensureLoaded()
-        return mergedStatuses()[CalendarUtils.key(for: date)] ?? .normal
-    }
-
-    func queryName(for date: Date) -> String? {
-        ensureLoaded()
-        return offDayTable.names[CalendarUtils.key(for: date)]
-    }
-
     /// 合并后的完整日表（放假在前，补班覆盖）。
-    private func mergedStatuses() -> [String: WorkRestStatus] {
+    /// 日表的**对外出口只有这一个**：着色（`HolidayRegistry.rebuild`）与事件展开
+    /// 都从这里取，避免两处各算一遍导致口径不一致。
+    func mergedStatuses() -> [String: WorkRestStatus] {
         var merged = offDayTable.statuses
         for (key, status) in makeUpWorkTable.statuses { merged[key] = status }
         return merged

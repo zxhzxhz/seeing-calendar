@@ -347,10 +347,21 @@ struct RootView: View {
             return
         }
 
-        // 情况 B：今天在其它月 → 用翻月平移动画切过去，落位后高亮
-        pager.settle(to: forward ? -containerWidth : containerWidth) {
-            month = todayMonth
-            selectedDate = today
+        // 情况 B：今天在其它月 → 若恰好是相邻月就用翻月平移动画；
+        // 跨多个月时**不能**滑动（翻页器只渲染前后各一个月，滑过去会露出未渲染的空白），
+        // 直接重定位 + 脉冲。
+        let nextMonth = CalendarUtils.addMonths(1, to: month)
+        if CalendarUtils.isSameDay(nextMonth, todayMonth) {
+            pager.settle(to: -containerWidth) {
+                month = todayMonth
+                selectedDate = today
+                triggerPulse(key)
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                month = todayMonth
+                selectedDate = today
+            }
             triggerPulse(key)
         }
     }

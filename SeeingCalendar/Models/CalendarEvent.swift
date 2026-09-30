@@ -28,6 +28,35 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
 
     var duration: TimeInterval { max(0, end.timeIntervalSince(start)) }
 
+    /// 显式成员初始化。
+    ///
+    /// 为什么必须手写：本类型在下方声明了 `init(from:)`，而**只要结构体体内出现过任何
+    /// 自定义初始化，Swift 合成的成员初始化就不会生成**。不写这里，构造调用会被解析到
+    /// `init(from:)` 上，报出与真实原因毫无关系的 `missing argument for parameter 'from'`
+    /// 加上 `extra arguments at positions #1…#10`（v1.0.17 首次 CI 编译就是这么炸的）。
+    /// `isHoliday` 保留默认值，老调用点无需修改。
+    init(id: String,
+         subscriptionUUID: UUID,
+         subscriptionName: String,
+         colorHex: String,
+         title: String,
+         location: String?,
+         start: Date,
+         end: Date,
+         isAllDay: Bool,
+         isHoliday: Bool = false) {
+        self.id = id
+        self.subscriptionUUID = subscriptionUUID
+        self.subscriptionName = subscriptionName
+        self.colorHex = colorHex
+        self.title = title
+        self.location = location
+        self.start = start
+        self.end = end
+        self.isAllDay = isAllDay
+        self.isHoliday = isHoliday
+    }
+
     // MARK: - Codable
 
     /// 手写解码：`isHoliday` 是后加的字段，老备份/老缓存里没有这个键。
