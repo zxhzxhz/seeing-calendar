@@ -76,18 +76,31 @@ SHAPE_RE = re.compile(
 )
 
 
-#: property wrapper 不能用调用式构造。`EquatableView { Content }` 会被解析成
-#: 「把闭包本身当作内容」，报 `type '() -> X' cannot conform to 'Equatable'`。
-#: 正确写法是属性形式：`@EquatableView var grid: MonthGridView`。
-WRAPPER_CALL_RE = re.compile(r"(?<!@)(?<!\w)\b(EquatableView)\s*\(?\s*\{")
+#: EquatableView 的构造形状。真实声明（SwiftUI.swiftinterface）：
+#:     @frozen public struct EquatableView<Content> : View where Content : Equatable, Content : View {
+#:         public init(content: Content)          // 收的是「值」，不是闭包
+#:     }
+#:     extension View where Self : Equatable { public func equatable() -> EquatableView<Self> }
+#: 也就是说正确写法只有两种：`.equatable()`，或 `EquatableView(content: v)`。
+#: v1.0.17 为此烧了两轮 CI：
+#:   ① `EquatableView { … }`  → 被当成把闭包当内容 → `type '() -> X' cannot conform to 'Equatable'`
+#:   ② `@EquatableView var x` → 它不是 property wrapper → `generic struct cannot be used as an attribute`
+#: 两种都拦掉，并在提示里直接给出正确形状。
+WRAPPER_CALL_RE = re.compile(r"(?<!@)(?<!\w)\b(EquatableView)\s*\(?\s*(?:\{|\(content:)")
+WRAPPER_ATTR_RE = re.compile(r"@EquatableView\s+var\s")
 
 
 def check_wrapper_calls(rel, stripped, problems):
     for match in WRAPPER_CALL_RE.finditer(stripped):
         problems.append(
-            f"{rel}: {match.group(1)} 以调用式构造 —— 会被解析成「把闭包当内容」。"
-            "property wrapper 只能用属性形式：`@EquatableView var grid: MonthGridView`"
-            "（必要时用薄壳 View 包一层）。"
+            f"{rel}: EquatableView 构造形状错误 —— 它的 init 收的是**值**"
+            "（`init(content:)`），不是闭包，也不是 property wrapper。正确写法：`.equatable()`，"
+            "或 `EquatableView(content: v)`（要求 v 同时是 View & Equatable）。"
+        )
+    for _ in WRAPPER_ATTR_RE.finditer(stripped):
+        problems.append(
+            f"{rel}: `EquatableView` 不是 property wrapper，不能当属性用"
+            "（会报 generic struct cannot be used as an attribute）。请用 `.equatable()`。"
         )
 
 

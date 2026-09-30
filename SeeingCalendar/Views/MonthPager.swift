@@ -39,19 +39,6 @@ final class MonthPagerState {
     }
 }
 
-/// 月历单页的等值短路壳。
-///
-/// `EquatableView` 是 **property wrapper**，只能以属性形式使用（`@EquatableView var grid: …`）。
-/// 写成调用式的 `EquatableView { MonthGridView(…) }` 会被解析成「把闭包本身当作内容」：
-/// `Content` 推断成 `() -> MonthGridView`，于是报
-/// `type '() -> MonthGridView' cannot conform to 'Equatable' / 'View'`。
-/// 所以用这层薄壳把属性形式包起来，语义不变：输入未变 → 整棵 42 格子树不重算。
-private struct MonthPage: View {
-    @EquatableView var grid: MonthGridView
-
-    var body: some View { grid }
-}
-
 /// 月历翻页器：左右拖动切换月份，上/下月常驻预渲染。
 ///
 /// 性能约定：
@@ -99,19 +86,24 @@ struct MonthPager: View {
 
     private func page(offset delta: Int) -> some View {
         let target = CalendarUtils.addMonths(delta, to: month)
-        return MonthPage(grid: MonthGridView(month: target,
-                                             selectedDate: selectedDate,
-                                             records: records,
-                                             eventsByDay: eventsByDay,
-                                             holidays: holidays,
-                                             holidayNames: holidayNames,
-                                             contentToken: contentToken,
-                                             availableSize: availableSize,
-                                             pulseKey: pulseKey,
-                                             pulseID: pulseID,
-                                             zoomNamespace: zoomNamespace,
-                                             onSelect: onSelect,
-                                             onOpen: onOpen))
+        // .equatable() → EquatableView(content:)：输入未变时整棵 42 格子树不重算，
+        // 拖动期间只做一次 layer transform。
+        // 注意：`.frame` 必须接在 `.equatable()` **之后**（反过来的话内容类型变成
+        // ModifiedContent，那不是 Equatable，短路就失效了）。
+        return MonthGridView(month: target,
+                             selectedDate: selectedDate,
+                             records: records,
+                             eventsByDay: eventsByDay,
+                             holidays: holidays,
+                             holidayNames: holidayNames,
+                             contentToken: contentToken,
+                             availableSize: availableSize,
+                             pulseKey: pulseKey,
+                             pulseID: pulseID,
+                             zoomNamespace: zoomNamespace,
+                             onSelect: onSelect,
+                             onOpen: onOpen)
+            .equatable()
             .frame(width: containerWidth)
     }
 
