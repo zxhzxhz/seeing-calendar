@@ -236,7 +236,8 @@ expectEqual(Fixture.key(for: cstNineAm, timeZone: Fixture.holidayCalendar.timeZo
 func years(of table: Table) -> [Int] {
     Set(table.statuses.keys.compactMap { Int($0.prefix(4)) }).sorted()
 }
-expectEqual(years(of: offDay), [2023, 2024, 2025, 2026], "放假覆盖年份")
+// 上游 HO 文件确实含 2022-12-31 / 2023-01-02（元旦跨年），所以下限是 2022
+expectEqual(years(of: offDay), [2022, 2023, 2024, 2025, 2026], "放假覆盖年份")
 expectEqual(years(of: makeUp), [2023, 2024, 2025, 2026], "补班覆盖年份")
 
 let overlap = Set(offDay.statuses.keys).intersection(makeUp.statuses.keys)

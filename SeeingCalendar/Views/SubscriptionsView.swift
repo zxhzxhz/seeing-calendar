@@ -78,7 +78,7 @@ struct SubscriptionsView: View {
                 } header: {
                     Text("中国节假日（内置）")
                 } footer: {
-                    Text("两条内置凭据默认开启：放假（holidayCal-HO）与调休补班（holidayCal-CO），覆盖 2023–2026。放假与周末用暖色样式，调休上班日与普通工作日用中性样式。更新失败时自动回落到本地数据。")
+                    Text("两条内置凭据默认开启：放假（holidayCal-HO）与调休补班（holidayCal-CO），覆盖 2022–2026。放假与周末用暖色样式，调休上班日与普通工作日用中性样式。更新失败时自动回落到本地数据。")
                 }
 
                 Section("新增订阅") {

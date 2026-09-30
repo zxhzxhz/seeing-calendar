@@ -197,7 +197,7 @@ final class CalendarEventStore {
                               userInfo: [NSLocalizedDescriptionKey: "包内缺少 \(fileName)"])
             }
             text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-            // 内置数据已知覆盖 2023–2026，窗口开宽到 2020–2035 即可（142 条，内存可忽略）。
+            // 内置数据已知覆盖 2022–2026，窗口开宽到 2020–2035 即可（142 条，内存可忽略）。
             range = DateInterval(start: CalendarUtils.date(fromKey: "20200101") ?? window.start,
                                  end: CalendarUtils.date(fromKey: "20351231") ?? window.end)
         } else {
