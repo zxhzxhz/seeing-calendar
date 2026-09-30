@@ -62,6 +62,11 @@ final class SelectionOverlayView: UIView {
         }
     }
 
+    /// 手指是否可参与套索（= 编辑器里的「手指书写」开关）。
+    /// 关闭时仅 Apple Pencil 能画套索；手指的触摸由覆盖层接收但**不产生套索**，
+    /// 从而不阻断容器自身的点选/取消选中逻辑。
+    var allowsFingerLasso: Bool = true
+
     private(set) var mode: Mode = .none
     private let marqueeLayer = CAShapeLayer()
     private let lassoLayer = CAShapeLayer()
@@ -479,6 +484,16 @@ final class SelectionOverlayView: UIView {
             super.touchesBegan(touches, with: event)
             return
         }
+
+        // 触摸类型必须在这里判定：`UITouch.type` 在 touchesBegan 是可靠的，
+        // 而 `UIEvent.allTouches` 在 hitTest 阶段不可靠。
+        guard touch.type == .pencil || allowsFingerLasso else {
+            isCapturingLasso = false
+            lassoPoints.removeAll()
+            lassoLayer.path = nil
+            return
+        }
+
         let location = touch.location(in: self)
 
         // 已有选区时，从选区内部开始的触摸**不产生新套索**

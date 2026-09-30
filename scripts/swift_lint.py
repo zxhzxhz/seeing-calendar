@@ -50,6 +50,34 @@ DECL_RE = re.compile(
 )
 
 
+#: 已知陷阱检查（纯字符串匹配，避免多层转义问题）。
+#: 每条 = (触发前缀, 触发关键字, 说明)。
+#: 判定方式：在同一文件里，关键字出现在前缀之后（且距离不超过窗口）即命中。
+PITFALLS: list[tuple[str, str, int, str]] = [
+    (
+        "override func hitTest",
+        "allTouches",
+        2000,
+        "UIEvent.allTouches 在 hitTest(_:with:) 阶段不可靠（初次落笔常常取不到该触摸），"
+        "据此分流会导致「关闭手指开关后无法套索」。触摸类型请在 touchesBegan 内用 UITouch.type 判定。",
+    ),
+]
+
+
+def check_pitfalls(rel: str, stripped: str, problems: list[str]) -> None:
+    for prefix, keyword, window, reason in PITFALLS:
+        cursor = 0
+        while True:
+            found = stripped.find(prefix, cursor)
+            if found < 0:
+                break
+            segment = stripped[found:found + window]
+            if keyword in segment:
+                problems.append(f"{rel}: 命中已知陷阱 —— {reason}")
+                break
+            cursor = found + len(prefix)
+
+
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     files = sorted((root / "SeeingCalendar").rglob("*.swift"))
@@ -68,6 +96,7 @@ def main() -> int:
                 problems.append(f"{path.relative_to(root)}: unbalanced {label} ({delta:+d})")
         for match in DECL_RE.finditer(source):
             declarations[match.group(2)].append(path.name)
+        check_pitfalls(str(path.relative_to(root)), stripped, problems)
 
     duplicates = {name: where for name, where in declarations.items() if len(where) > 1}
 
