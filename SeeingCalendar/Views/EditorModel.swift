@@ -93,6 +93,10 @@ final class EditorModel {
     private(set) var canRedo = false
     var hasClipboard = false
     var isCanvasExpanded = false
+    /// 是否有触摸落在画纸（可绘画区域）内（由 CanvasHostView 上报）。
+    var isPaperTouchActive = false
+    /// 是否有选区手势进行中（拖动/裁剪/缩放，由容器上报）。
+    var isSelectionGestureActive = false
     var isReplacingImage = false
     var replaceTargetID: UUID?
     var note: String
@@ -156,6 +160,22 @@ final class EditorModel {
             guard let self else { return }
             self.replaceTargetID = id
             self.isReplacingImage = true
+        }
+        host.onPaperTouchChanged = { [weak self] active in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.isPaperTouchActive != active {
+                    self.isPaperTouchActive = active
+                }
+            }
+        }
+        host.canvas.onAdjustingSelectionChanged = { [weak self] active in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.isSelectionGestureActive != active {
+                    self.isSelectionGestureActive = active
+                }
+            }
         }
         host.onZoomChange = { [weak self] scale, fit in
             // 首帧布局期间 UIKit 仍处于 SwiftUI 的更新回合内，延后一拍回写状态。
@@ -455,6 +475,14 @@ final class EditorModel {
 
     /// 是否处于「无工具 / 导航」状态。
     var isNavigating: Bool { activeTool == nil }
+
+    /// 是否应锁住「交互式下拉返回」。
+    /// 命中条件：① 落笔在画纸（可绘画区域）内；② 或贴图/选区手势正在继续
+    /// —— 后者覆盖"贴图被拖到画纸之外仍在编辑"的例外情况。
+    /// 页条 / 工具栏 / 画布留白处不满足任一条件 → 照常可下拉返回主页面。
+    var isCanvasInteractionActive: Bool {
+        isPaperTouchActive || isSelectionGestureActive
+    }
 
     /// 套索 —— 与笔墨工具互斥。
     func toggleLasso() {

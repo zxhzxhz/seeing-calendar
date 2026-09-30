@@ -43,7 +43,15 @@ final class CompositeCanvasContainerView: UIView {
     var isGroupTransforming = false
     /// 任何「正在拖拽选区」的状态（手柄 / 贴图位移 / 整体变换）——
     /// 期间只做几何更新，绝不重建手柄，也绝不重弹菜单。
-    var isAdjustingSelection = false
+    var isAdjustingSelection = false {
+        didSet {
+            guard oldValue != isAdjustingSelection else { return }
+            onAdjustingSelectionChanged?(isAdjustingSelection)
+        }
+    }
+
+    /// 选区手势状态回调：用于在图片操作期间锁住「交互式下拉返回」。
+    var onAdjustingSelectionChanged: ((Bool) -> Void)?
     var croppingImageID: UUID?
     var floatingPreview: UIImageView?
     var gestureBaseTransform: CGAffineTransform?
@@ -187,6 +195,14 @@ final class CompositeCanvasContainerView: UIView {
     }
 
     // MARK: - 触控仲裁（spec 3.1 核心）
+
+    /// 允许在画布矩形之外参与命中测试：
+    /// 贴图可以被拖出 1400×1400 画布之外（视口留白处仍会绘制），
+    /// 若不放行 `point(inside:)`，这些贴图就会"看得见、摸不着"，也无法保证图片操作优先于消失手势。
+    /// 命中失败时返回 nil，事件照旧落到外层滚动视图（双指平移缩放不受影响）。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }

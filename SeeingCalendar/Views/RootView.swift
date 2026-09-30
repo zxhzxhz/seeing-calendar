@@ -93,9 +93,6 @@ struct RootView: View {
                           isFingerDrawingEnabled: fingerDrawingEnabled,
                           onFingerDrawingChanged: { fingerDrawingEnabled = $0 })
                 .navigationTransition(.zoom(sourceID: request.sourceID, in: zoomNamespace))
-                // 画布是创作态：禁用交互式"下拉返回主页面"手势，
-                // 否则在画布上拖动（尤其从顶部附近起手）会被系统当作消失手势。
-                .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $showSubscriptions) {
             SubscriptionsView(eventStore: eventStore) {

@@ -3,12 +3,40 @@ import UIKit
 
 /// 画布宿主：外层统一缩放/平移（两层共享同一世界坐标系，几何永不错位）。
 @MainActor
-final class CanvasHostView: UIView, UIScrollViewDelegate {
+final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     let scrollView = UIScrollView()
     let canvas: CompositeCanvasContainerView
 
     /// (当前缩放, 适配置缩放) —— 供 SwiftUI 层驱动“最大化 / 缩小”按钮状态。
     var onZoomChange: ((CGFloat, CGFloat) -> Void)?
+
+    /// 是否有触摸按在**画纸（可绘画区域）内**。
+    /// 用于按区域门控「交互式下拉返回」：画纸内禁止；页条/工具栏/画布留白处放行。
+    /// 只在落笔瞬间判定一次，拖拽中途不翻转（否则拖出画纸时手势会被突然放开）。
+    var onPaperTouchChanged: ((Bool) -> Void)?
+
+    private lazy var touchObserver: UILongPressGestureRecognizer = {
+        let gesture = UILongPressGestureRecognizer(target: self, action: #selector(handleTouchObserver(_:)))
+        gesture.minimumPressDuration = 0
+        gesture.allowableMovement = .greatestFiniteMagnitude
+        gesture.cancelsTouchesInView = false
+        gesture.delaysTouchesBegan = false
+        gesture.delaysTouchesEnded = false
+        gesture.delegate = self
+        return gesture
+    }()
+
+    @objc private func handleTouchObserver(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            let pointInCanvas = canvas.convert(gesture.location(in: self), from: self)
+            onPaperTouchChanged?(canvas.bounds.contains(pointInCanvas))
+        case .ended, .cancelled, .failed:
+            onPaperTouchChanged?(false)
+        default:
+            break
+        }
+    }
 
     private var didPerformInitialFit = false
 
@@ -40,6 +68,8 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
 
         canvas.frame = CGRect(origin: .zero, size: CompositeCanvasContainerView.canvasSize)
         scrollView.addSubview(canvas)
+
+        addGestureRecognizer(touchObserver)
     }
 
     override func layoutSubviews() {
@@ -132,6 +162,12 @@ final class CanvasHostView: UIView, UIScrollViewDelegate {
 
     func setTool(_ tool: PKTool) {
         canvas.canvasView.tool = tool
+    }
+
+    /// 与画布内的绘制/手势共存：只观察，不抢。
+    nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                                       shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
     }
 
     /// 导航态（取消全部工具 / 笔画）：禁止落笔，单指即可平移，双指缩放。

@@ -59,6 +59,9 @@ struct DayEditorView: View {
             .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent(model: model) }
+            // 交互式下拉返回：**仅在画布视口内**禁用（含图片操作进行中）。
+            // 页条 / 工具栏 / 顶部导航等区域照常可下拉返回主页面。
+            .interactiveDismissDisabled(model.isCanvasInteractionActive)
             .onDisappear {
                 model.finishEditing()
                 // 编辑过程中不回写全局开关（会触发外层重渲染并打断 UIKit 状态），关闭时统一回写。
