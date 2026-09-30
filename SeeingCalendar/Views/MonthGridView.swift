@@ -6,12 +6,18 @@ import SwiftUI
 /// ① 单元格的输入不含「是否选中」——选中环由本视图单独一层绘制，点选时 126 个格子无需重算；
 /// ② 页数取自 `DayRecord.pageCount` 冗余字段，渲染路径上不触碰 SwiftData 关系（避免 fault）；
 /// ③ 单击/双击由本视图自己做时间判定，不再依赖 SwiftUI 单/双击手势仲裁（否则单击要等 ~300ms）。
-struct MonthGridView: View {
+/// ④ 本视图遵循 `Equatable` 且比较是 O(1)：翻月滑动时由父层的 `EquatableView` 整体短路，
+///    126 个日格的 body 一次都不会重跑。
+struct MonthGridView: View, Equatable {
     let month: Date
     let selectedDate: Date
     let records: [String: DayRecord]
     let eventsByDay: [String: [CalendarEvent]]
     let holidays: [String: WorkRestStatus]
+    /// 日期键 → 节日名（`国庆节`），仅放假日有值。
+    let holidayNames: [String: String]
+    /// 父层预计算的内容指纹（已含日记录 / 事件 / 假期 / 缩略图版本）。
+    let contentToken: Int
     let availableSize: CGSize
     /// 「今天」定位脉冲高亮的日期键与代次。
     let pulseKey: String?
@@ -20,6 +26,22 @@ struct MonthGridView: View {
     let zoomNamespace: Namespace.ID
     let onSelect: (Date) -> Void
     let onOpen: (Date) -> Void
+
+    /// O(1) 等价判定。
+    ///
+    /// 刻意不比 `records` / `eventsByDay` / `holidays`：`DayRecord` 是类、非 `Equatable`，
+    /// 字典逐项比较也是 O(n)；而这些内容的任何变化都会反映在父层给的 `contentToken` 里。
+    /// 闭包与 `zoomNamespace` 同理不参与比较（前者每次重建，后者生命周期内恒定）。
+    /// `pulseKey` / `pulseID` 必须参与：脉冲环 900ms 后要把 `pulseKey` 置回 nil 来收尾，
+    /// 只比 `pulseID` 会让环永远留在格子上。
+    nonisolated static func == (lhs: MonthGridView, rhs: MonthGridView) -> Bool {
+        lhs.contentToken == rhs.contentToken
+            && lhs.month == rhs.month
+            && lhs.selectedDate == rhs.selectedDate
+            && lhs.availableSize == rhs.availableSize
+            && lhs.pulseID == rhs.pulseID
+            && lhs.pulseKey == rhs.pulseKey
+    }
 
     @State private var thumbnails: [String: UIImage] = [:]
     @State private var lastTapKey: String?
@@ -119,12 +141,15 @@ struct MonthGridView: View {
         let key = CalendarUtils.key(for: date)
         let record = records[key]
         let inMonth = CalendarUtils.month(of: date) == CalendarUtils.month(of: month)
+        // 内置假期事件不画胶囊（班休样式 + 节日名角标已经表达了它），避免与手绘争焦点。
+        let capsuleEvents = (eventsByDay[key] ?? []).filter { !$0.isHoliday }
         return DayCellView(date: date,
                            inCurrentMonth: inMonth,
                            thumbnail: thumbnails[key],
                            pageCount: record?.pageCount ?? 0,   // 冗余字段，不触发关系 fault
-                           events: eventsByDay[key] ?? [],
+                           events: capsuleEvents,
                            holiday: holidays[key] ?? .normal,
+                           holidayName: holidayNames[key],
                            isPulsing: pulseKey == key,
                            pulseID: pulseID,
                            tier: tier)

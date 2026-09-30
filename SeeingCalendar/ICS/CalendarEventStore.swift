@@ -18,6 +18,8 @@ struct SubscriptionSnapshot: Sendable {
     let colorHex: String
     let url: URL
     let workspaceUUID: UUID?
+    /// 内置节假日凭据：读包内资源（不走网络）、覆盖全部年份、且不画日格胶囊。
+    let isHoliday: Bool
 }
 
 /// ICS 订阅聚合与按日索引。所有网络与解析都在非主线程完成，主线程只做索引与展示。
@@ -70,12 +72,21 @@ final class CalendarEventStore {
         let snapshots: [SubscriptionSnapshot] = subscriptions
             .filter { $0.isEnabled && !$0.urlString.isEmpty }
             .compactMap { subscription in
+                if let source = subscription.bundledSource {
+                    return SubscriptionSnapshot(uuid: subscription.uuid,
+                                                name: subscription.name,
+                                                colorHex: subscription.colorHex,
+                                                url: URL(string: "file:///\(source.fileName)")!,
+                                                workspaceUUID: subscription.workspaceUUID,
+                                                isHoliday: true)
+                }
                 guard let url = CalendarEventStore.normalizedURL(subscription.urlString) else { return nil }
                 return SubscriptionSnapshot(uuid: subscription.uuid,
                                             name: subscription.name,
                                             colorHex: subscription.colorHex,
                                             url: url,
-                                            workspaceUUID: subscription.workspaceUUID)
+                                            workspaceUUID: subscription.workspaceUUID,
+                                            isHoliday: false)
             }
 
         guard !snapshots.isEmpty else {
@@ -115,7 +126,6 @@ final class CalendarEventStore {
                 }
             }
         }
-
         collected.sort { $0.start < $1.start }
         events = collected
         lastRefresh = now
@@ -133,12 +143,20 @@ final class CalendarEventStore {
 
     private func rebuildIndex() {
         var index: [String: [CalendarEvent]] = [:]
+        // 假期事件用 CST 取日（与 BundledHolidayProvider 的着色日表同源），
+        // 否则西部时区设备上「格子里染成补班的日期」与「抽屉里列出的日期」会差一天。
+        let holidayZone = CalendarUtils.holidayCalendar.timeZone
         for event in events {
-            var day = CalendarUtils.startOfDay(event.start)
-            let lastDay = CalendarUtils.startOfDay(event.end.addingTimeInterval(-1))
+            let zone: TimeZone? = event.isHoliday ? holidayZone : nil
+            var day = zone.map { CalendarUtils.startOfDay(event.start, timeZone: $0) }
+                ?? CalendarUtils.startOfDay(event.start)
+            let lastDay = zone.map { CalendarUtils.startOfDay(event.end.addingTimeInterval(-1), timeZone: $0) }
+                ?? CalendarUtils.startOfDay(event.end.addingTimeInterval(-1))
             var guardCount = 0
             while day <= lastDay, guardCount < 400 {
-                index[CalendarUtils.key(for: day), default: []].append(event)
+                let key = zone.map { CalendarUtils.key(for: day, timeZone: $0) }
+                    ?? CalendarUtils.key(for: day)
+                index[key, default: []].append(event)
                 day = CalendarUtils.addDays(1, to: day)
                 guardCount += 1
             }
@@ -164,23 +182,48 @@ final class CalendarEventStore {
     }
 
     nonisolated static func fetch(snapshot: SubscriptionSnapshot, window: DateInterval) async throws -> [CalendarEvent] {
-        var request = URLRequest(url: snapshot.url)
-        request.timeoutInterval = 20
-        request.setValue("text/calendar, text/plain, */*", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw NSError(domain: "ICS", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+        let text: String
+        let range: DateInterval
+
+        if snapshot.isHoliday {
+            // 内置凭据：读包内资源，**不裁剪到「今天±N 月」**，
+            // 否则回看 2023/2024 时抽屉里会空掉。全量仅 142 条，成本可忽略。
+            let fileName = snapshot.url.lastPathComponent
+            let source = BundledHolidaySource.allCases.first { $0.fileName == fileName }
+            guard let source,
+                  let url = BundledHolidayProvider.effectiveICSURL(for: source),
+                  let data = try? Data(contentsOf: url) else {
+                throw NSError(domain: "ICS", code: 404,
+                              userInfo: [NSLocalizedDescriptionKey: "包内缺少 \(fileName)"])
+            }
+            text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+            // 内置数据已知覆盖 2023–2026，窗口开宽到 2020–2035 即可（142 条，内存可忽略）。
+            range = DateInterval(start: CalendarUtils.date(fromKey: "20200101") ?? window.start,
+                                 end: CalendarUtils.date(fromKey: "20351231") ?? window.end)
+        } else {
+            var request = URLRequest(url: snapshot.url)
+            request.timeoutInterval = 20
+            request.setValue("text/calendar, text/plain, */*", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw NSError(domain: "ICS", code: http.statusCode,
+                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+            }
+            text = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? ""
+            range = window
         }
-        let text = String(data: data, encoding: .utf8)
-            ?? String(data: data, encoding: .isoLatin1)
-            ?? ""
         guard !text.isEmpty else { return [] }
 
-        let parsed = ICSParser.parse(text)
+        // 假期数据的浮动时间按 CST 解释；用户自建订阅按设备时区。
+        let parsed = ICSParser.parse(text,
+                                     defaultTimeZone: snapshot.isHoliday
+                                        ? CalendarUtils.holidayCalendar.timeZone
+                                        : nil)
         var output: [CalendarEvent] = []
         for event in parsed {
-            let occurrences = ICSParser.occurrences(of: event, in: window)
+            let occurrences = ICSParser.occurrences(of: event, in: range)
             for occurrence in occurrences {
                 output.append(CalendarEvent(id: "\(snapshot.uuid.uuidString)|\(event.uid)|\(occurrence.start.timeIntervalSince1970)",
                                             subscriptionUUID: snapshot.uuid,
@@ -190,7 +233,8 @@ final class CalendarEventStore {
                                             location: event.location,
                                             start: occurrence.start,
                                             end: occurrence.end,
-                                            isAllDay: event.isAllDay))
+                                            isAllDay: event.isAllDay,
+                                            isHoliday: snapshot.isHoliday))
             }
         }
         return output

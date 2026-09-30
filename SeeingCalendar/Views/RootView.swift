@@ -34,9 +34,8 @@ struct RootView: View {
     @State private var showRestoreDialog = false
     @State private var toast: String?
 
-    // 翻月手势
-    @State private var monthDragOffset: CGFloat = 0
-    @State private var isSettling = false
+    // 翻月手势状态（刻意不放在 RootView 的 @State 里，见 MonthPagerState 的注释）
+    @State private var pager = MonthPagerState()
     // 「今天」定位脉冲
     @State private var pulseKey: String?
     @State private var pulseToken: Int = 0
@@ -80,6 +79,10 @@ struct RootView: View {
         .task { await bootstrap() }
         .onChange(of: subscriptions.map(\.urlString)) { _, _ in
             Task { await eventStore.refresh(subscriptions: subscriptions, force: true) }
+        }
+        // 订阅开关 / 启用状态变化 → 重建班休日表（只影响 O(1) 字典，不重建子树）。
+        .onChange(of: subscriptions.map { "\($0.uuid.uuidString):\($0.isEnabled)" }) { _, _ in
+            rebuildHolidays()
         }
         .onOpenURL { url in
             Task { await handleIncoming(url: url) }
@@ -151,91 +154,62 @@ struct RootView: View {
     // MARK: - 月历 + 左右滑动翻月（上/下月常驻预渲染）
 
     private func monthPager(availableSize: CGSize, containerWidth: CGFloat) -> some View {
-        let cell = MonthGridView.cellWidth(availableSize: availableSize)
-        let height = MonthGridView.gridHeight(cellWidth: cell)
-        return HStack(spacing: 0) {
-            page(for: CalendarUtils.addMonths(-1, to: month), availableSize: availableSize, width: containerWidth)
-            page(for: month, availableSize: availableSize, width: containerWidth)
-            page(for: CalendarUtils.addMonths(1, to: month), availableSize: availableSize, width: containerWidth)
-        }
-        .frame(width: containerWidth * 3, height: height, alignment: .leading)
-        .offset(x: -containerWidth + monthDragOffset)
-        .frame(width: containerWidth, height: height, alignment: .leading)
-        .clipped()
-        .contentShape(Rectangle())
-        .simultaneousGesture(monthSwipe(containerWidth: containerWidth))
+        MonthPager(month: month,
+                   selectedDate: selectedDate,
+                   records: dayRecords,
+                   eventsByDay: pagedEvents,
+                   holidays: holidayRegistry.statuses,
+                   holidayNames: holidayRegistry.names,
+                   contentToken: monthContentToken,
+                   availableSize: availableSize,
+                   containerWidth: containerWidth,
+                   pulseKey: pulseKey,
+                   pulseID: pulseToken,
+                   zoomNamespace: zoomNamespace,
+                   state: pager,
+                   onSelect: { date in
+                       // 只更新选中日期：点中非本月日格也**不切换月视图**，
+                       // 画布就在本页弹出（spec 交互诉求）。
+                       selectedDate = date
+                   },
+                   onOpen: { date in openDay(date, pageIndex: 0) },
+                   onMonthChange: { delta in
+                       month = CalendarUtils.addMonths(delta, to: month)
+                   })
     }
 
-    private func page(for target: Date, availableSize: CGSize, width: CGFloat) -> some View {
-        monthGrid(for: target, availableSize: availableSize)
-            .frame(width: width)
-    }
-
-    /// 与 iOS 原生桌面翻页一致：位移阈值很低，主要判定依据是**速度**。
-    private func monthSwipe(containerWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard !isSettling else { return }
-                let dx = value.translation.width
-                let dy = value.translation.height
-                guard abs(dx) > abs(dy) else { return }   // 只接管横向滑动
-                monthDragOffset = dx
+    /// 三个可见月的网格日期（当月 ±1）上预建的事件索引。
+    ///
+    /// 只在 `RootView.body` 里算一次，翻页手势期间不再重算（手势状态不在 RootView 里）。
+    private var pagedEvents: [String: [CalendarEvent]] {
+        var index: [String: [CalendarEvent]] = [:]
+        for delta in [-1, 0, 1] {
+            for date in CalendarUtils.gridDates(forMonthContaining: CalendarUtils.addMonths(delta, to: month)) {
+                let key = CalendarUtils.key(for: date)
+                let events = eventStore.events(onDayKey: key).filter { !$0.isHoliday }
+                if !events.isEmpty { index[key] = events }
             }
-            .onEnded { value in
-                guard !isSettling else { return }
-                let velocity = value.velocity.width        // > 0 表示向右滑（看上一月）
-                let distanceThreshold = containerWidth * 0.13
-                var direction = 0                          // +1 → 下一月（内容左移）
-                if velocity > 220 {
-                    direction = -1
-                } else if velocity < -220 {
-                    direction = 1
-                } else if monthDragOffset > distanceThreshold {
-                    direction = -1
-                } else if monthDragOffset < -distanceThreshold {
-                    direction = 1
-                }
-
-                guard direction != 0 else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
-                        monthDragOffset = 0
-                    }
-                    return
-                }
-
-                isSettling = true
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                    monthDragOffset = CGFloat(direction) * -containerWidth
-                } completion: {
-                    month = CalendarUtils.addMonths(direction, to: month)
-                    monthDragOffset = 0
-                    isSettling = false
-                }
-            }
+        }
+        return index
     }
 
-    private func monthGrid(for target: Date, availableSize: CGSize) -> some View {
-        var eventsByDay: [String: [CalendarEvent]] = [:]
-        for date in CalendarUtils.gridDates(forMonthContaining: target) {
-            let key = CalendarUtils.key(for: date)
-            let events = eventStore.events(onDayKey: key)
-            if !events.isEmpty { eventsByDay[key] = events }
+    /// O(1) 判定用的内容指纹：把「会影响月历外观的所有输入」压成一个整数。
+    ///
+    /// 为什么需要：`MonthGridView` 遵循 `Equatable`，翻月滑动时父层要把 126 个日格
+    /// 整体短路掉。但 `DayRecord` 是引用类型、字典逐项比较是 O(n)，直接比较会让短路失效。
+    /// 于是这里预扫一遍（约 126 次 O(1) 哈希查找，微秒级，且**只在 RootView.body 里发生一次**），
+    /// 任何绘制相关输入变化都会让指纹自增 —— 视图侧就只需比一个 Int。
+    private var monthContentToken: Int {
+        var token = 0
+        for record in dayRecords.values {
+            token = token &* 31 &+ Int(record.updatedAt.timeIntervalSince1970 * 1_000) &+ record.pageCount
         }
-        return MonthGridView(month: target,
-                             selectedDate: selectedDate,
-                             records: dayRecords,
-                             eventsByDay: eventsByDay,
-                             holidays: holidayRegistry.statuses,
-                             availableSize: availableSize,
-                             pulseKey: pulseKey,
-                             pulseID: pulseToken,
-                             zoomNamespace: zoomNamespace,
-                             onSelect: { date in
-                                 // 只更新选中日期：点中非本月日格也**不切换月视图**，
-                                 // 画布就在本页弹出（spec 交互诉求）。
-                                 selectedDate = date
-                             },
-                             onOpen: { date in openDay(date, pageIndex: 0) })
+        for events in pagedEvents.values {
+            token = token &* 31 &+ events.count
+        }
+        token = token &* 31 &+ holidayRegistry.version
+        token = token &* 31 &+ pagedEvents.count
+        return token
     }
 
     // MARK: - 顶栏
@@ -353,14 +327,8 @@ struct RootView: View {
 
     /// 箭头翻月走与手势翻月完全相同的平移动画，避免「硬切」观感。
     private func shiftMonth(_ delta: Int, containerWidth: CGFloat) {
-        guard !isSettling else { return }
-        isSettling = true
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-            monthDragOffset = CGFloat(delta) * -containerWidth
-        } completion: {
+        pager.settle(to: CGFloat(delta) * -containerWidth) {
             month = CalendarUtils.addMonths(delta, to: month)
-            monthDragOffset = 0
-            isSettling = false
         }
     }
 
@@ -380,15 +348,8 @@ struct RootView: View {
         }
 
         // 情况 B：今天在其它月 → 用翻月平移动画切过去，落位后高亮
-        guard !isSettling else { return }
-        let forward = todayMonth > month
-        isSettling = true
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-            monthDragOffset = forward ? -containerWidth : containerWidth
-        } completion: {
+        pager.settle(to: forward ? -containerWidth : containerWidth) {
             month = todayMonth
-            monthDragOffset = 0
-            isSettling = false
             selectedDate = today
             triggerPulse(key)
         }
@@ -416,6 +377,8 @@ struct RootView: View {
     private func bootstrap() async {
         // 旧库升级：一次性回填冗余页数（此后渲染路径不再触碰 pages 关系）。
         repository.backfillPageCountsIfNeeded()
+        // 幂等播种两条内置假期凭据（固定 UUID，已存在则只补齐字段；保存后 @Query 自动刷新）。
+        repository.ensureBuiltInSubscriptions()
         let fallback = repository.ensureDefaultWorkspace()
         if selectedWorkspaceUUID == nil {
             selectedWorkspaceUUID = workspaces.first?.uuid ?? fallback.uuid
@@ -423,7 +386,18 @@ struct RootView: View {
         if !subscriptions.isEmpty {
             await eventStore.refresh(subscriptions: subscriptions)
         }
+        rebuildHolidays()
         await performAutoSnapshotIfNeeded()
+    }
+
+    /// 由两条内置凭据的开关状态重建班休日表。
+    ///
+    /// 两条凭据互相独立：关掉「调休补班」只会让补班日退回周末语义，关掉「放假」则所有日期
+    /// 退回纯自然周末着色 —— 用户自建的 ICS 订阅不参与。
+    private func rebuildHolidays() {
+        let offDay = subscriptions.first { $0.bundledSource == .offDay }?.isEnabled ?? false
+        let makeUpWork = subscriptions.first { $0.bundledSource == .makeUpWork }?.isEnabled ?? false
+        holidayRegistry.rebuild(offDayEnabled: offDay, makeUpWorkEnabled: makeUpWork)
     }
 
     private func performAutoSnapshotIfNeeded() async {

@@ -4,10 +4,23 @@ import Foundation
 enum CalendarUtils {
     static let weekdaySymbols = ["一", "二", "三", "四", "五", "六", "日"]
 
-    static var calendar: Calendar {
+    static func calendar: Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
         cal.firstWeekday = 2          // 周一
+        cal.minimumDaysInFirstWeek = 4
+        return cal
+    }
+
+    /// 中国大陆法定节假日一律以 **CST（UTC+8）** 为准，不得跟随设备时区。
+    ///
+    /// 原因：调休补班事件在 ICS 里是 `DTSTART:20260104T090000`（浮动时间、无 TZID），
+    /// 语义是「北京时间 1 月 4 日早上 9 点上班」。若按设备时区解释，
+    /// 夏威夷（UTC-10）等西部时区的用户会把它算到**前一天**，补班样式就贴错格了。
+    static var holidayCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        cal.firstWeekday = 2
         cal.minimumDaysInFirstWeek = 4
         return cal
     }
@@ -16,6 +29,14 @@ enum CalendarUtils {
 
     static func key(for date: Date) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    /// 按指定时区取日期键（仅供节假日数据使用，见 `holidayCalendar`）。
+    static func key(for date: Date, timeZone: TimeZone) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        let parts = cal.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
@@ -29,6 +50,13 @@ enum CalendarUtils {
 
     static func startOfDay(_ date: Date) -> Date {
         calendar.startOfDay(for: date)
+    }
+
+    /// 按指定时区取日首（仅供节假日数据使用）。
+    static func startOfDay(_ date: Date, timeZone: TimeZone) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        return cal.startOfDay(for: date)
     }
 
     static func startOfMonth(_ date: Date) -> Date {

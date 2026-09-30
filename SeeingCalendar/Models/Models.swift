@@ -203,6 +203,9 @@ final class ICSSubscription {
     var lastFetched: Date?
     var lastError: String?
     var createdAt: Date
+    /// 内置 ICS 本地凭据（随包发行、不可删除、URL 形如 `bundled://holidayCal-HO.ics`）。
+    /// 带默认值 → SwiftData 轻量迁移，老库升级无需重建。
+    var isBuiltIn: Bool = false
 
     init(uuid: UUID = UUID(),
          name: String,
@@ -211,7 +214,8 @@ final class ICSSubscription {
          workspaceUUID: UUID? = nil,
          isEnabled: Bool = true,
          lastFetched: Date? = nil,
-         lastError: String? = nil) {
+         lastError: String? = nil,
+         isBuiltIn: Bool = false) {
         self.uuid = uuid
         self.name = name
         self.urlString = urlString
@@ -220,8 +224,21 @@ final class ICSSubscription {
         self.isEnabled = isEnabled
         self.lastFetched = lastFetched
         self.lastError = lastError
+        self.isBuiltIn = isBuiltIn
         self.createdAt = .now
     }
+
+    /// 绑定的内置来源（用户自建订阅为 nil）。
+    var bundledSource: BundledHolidaySource? {
+        BundledHolidaySource.source(forURLString: urlString)
+    }
+
+    /// 放假类内置订阅。
+    var isOffDaySource: Bool { bundledSource == .offDay }
+    /// 调休补班类内置订阅。
+    var isMakeUpWorkSource: Bool { bundledSource == .makeUpWork }
+    /// 假期类订阅不参与日格胶囊绘制（只驱动班休样式与角标），但仍会出现在抽屉里。
+    var isHolidaySource: Bool { bundledSource != nil }
 
     func applies(to workspaceUUID: UUID) -> Bool {
         self.workspaceUUID == nil || self.workspaceUUID == workspaceUUID

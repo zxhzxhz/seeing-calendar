@@ -12,6 +12,8 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     var start: Date
     var end: Date
     var isAllDay: Bool
+    /// 来自内置节假日凭据（放假 / 调休）。这类事件不画日格胶囊，只驱动班休样式与角标。
+    var isHoliday: Bool = false
 
     var dayKey: String { CalendarUtils.key(for: start) }
 
@@ -25,6 +27,29 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     }
 
     var duration: TimeInterval { max(0, end.timeIntervalSince(start)) }
+
+    // MARK: - Codable
+
+    /// 手写解码：`isHoliday` 是后加的字段，老备份/老缓存里没有这个键。
+    /// 合成解码器会直接抛 `keyNotFound`（不理会默认值），所以这里显式用 `decodeIfPresent`。
+    private enum CodingKeys: String, CodingKey {
+        case id, subscriptionUUID, subscriptionName, colorHex, title
+        case location, start, end, isAllDay, isHoliday
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        subscriptionUUID = try container.decode(UUID.self, forKey: .subscriptionUUID)
+        subscriptionName = try container.decode(String.self, forKey: .subscriptionName)
+        colorHex = try container.decode(String.self, forKey: .colorHex)
+        title = try container.decode(String.self, forKey: .title)
+        location = try container.decodeIfPresent(String.self, forKey: .location)
+        start = try container.decode(Date.self, forKey: .start)
+        end = try container.decode(Date.self, forKey: .end)
+        isAllDay = try container.decode(Bool.self, forKey: .isAllDay)
+        isHoliday = try container.decodeIfPresent(Bool.self, forKey: .isHoliday) ?? false
+    }
 }
 
 /// 节假日 / 调休状态（协议抽象层，业务数据待动态注入）。

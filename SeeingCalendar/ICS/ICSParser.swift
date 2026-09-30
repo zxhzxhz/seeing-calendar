@@ -38,7 +38,11 @@ enum ICSParser {
     }
 
     /// 展开折行、逐事件解析。
-    static func parse(_ text: String) -> [ICSEvent] {
+    ///
+    /// - Parameter defaultTimeZone: 无 `TZID`、无 `Z` 后缀的浮动时间的解释时区。
+    ///   中国节假日数据必须传 `CalendarUtils.holidayCalendar.timeZone`（CST）；
+    ///   用户自建的普通订阅传 nil 即可（跟随设备时区）。
+    static func parse(_ text: String, defaultTimeZone: TimeZone? = nil) -> [ICSEvent] {
         var events: [ICSEvent] = []
         var fields: [String: Field] = [:]
         var inEvent = false
@@ -51,7 +55,7 @@ enum ICSParser {
                 continue
             }
             if upper.hasPrefix("END:VEVENT") {
-                if inEvent, let event = makeEvent(fields) {
+                if inEvent, let event = makeEvent(fields, defaultTimeZone: defaultTimeZone) {
                     events.append(event)
                 }
                 inEvent = false
@@ -199,8 +203,8 @@ enum ICSParser {
         return (name, Field(params: params, value: value))
     }
 
-    private static func makeEvent(_ fields: [String: Field]) -> ICSEvent? {
-        guard let startField = fields["DTSTART"], let start = parseDate(startField) else { return nil }
+    private static func makeEvent(_ fields: [String: Field], defaultTimeZone: TimeZone?) -> ICSEvent? {
+        guard let startField = fields["DTSTART"], let start = parseDate(startField, defaultTimeZone: defaultTimeZone) else { return nil }
 
         var end = start.date
         var isAllDay = start.isDateOnly
@@ -212,8 +216,8 @@ enum ICSParser {
         }
 
         if isAllDay {
-            let startOfDay = CalendarUtils.startOfDay(start.date)
-            let endOfDay = CalendarUtils.startOfDay(end)
+            let startOfDay = CalendarUtils.startOfDay(start.date, timeZone: defaultTimeZone ?? CalendarUtils.calendar.timeZone)
+            let endOfDay = CalendarUtils.startOfDay(end, timeZone: defaultTimeZone ?? CalendarUtils.calendar.timeZone)
             if endOfDay <= startOfDay {
                 end = CalendarUtils.addDays(1, to: startOfDay)
             } else {
@@ -235,14 +239,16 @@ enum ICSParser {
         return ICSEvent(uid: fields["UID"]?.value ?? UUID().uuidString,
                         summary: unescape(fields["SUMMARY"]?.value ?? "未命名日程"),
                         location: fields["LOCATION"].map { unescape($0.value) },
-                        start: isAllDay ? CalendarUtils.startOfDay(start.date) : start.date,
+                        start: isAllDay
+                            ? CalendarUtils.startOfDay(start.date, timeZone: defaultTimeZone ?? CalendarUtils.calendar.timeZone)
+                            : start.date,
                         end: end,
                         isAllDay: isAllDay,
                         rrule: fields["RRULE"].flatMap { parseRule($0.value) },
                         exdates: exdates)
     }
 
-    private static func parseDate(_ field: Field) -> (date: Date, isDateOnly: Bool)? {
+    private static func parseDate(_ field: Field, defaultTimeZone: TimeZone? = nil) -> (date: Date, isDateOnly: Bool)? {
         let raw = field.value.trimmingCharacters(in: .whitespaces)
         let digits = raw.filter { $0.isNumber }
         guard digits.count >= 8 else { return nil }
@@ -254,7 +260,7 @@ enum ICSParser {
         } else if raw.hasSuffix("Z") {
             calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
         } else {
-            calendar.timeZone = .current
+            calendar.timeZone = defaultTimeZone ?? .current
         }
 
         var components = DateComponents()

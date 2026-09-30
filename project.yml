@@ -10,7 +10,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "1.0.16"
+    MARKETING_VERSION: "1.0.17"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
@@ -26,6 +26,13 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: SeeingCalendar
+        excludes:
+          - "Resources/Holidays"
+      # 内置假期 ICS 本地凭据：显式声明为资源拷贝阶段。
+      # 不显式声明的话，XcodeGen 会按扩展名猜测产物类别，.ics 的归属随版本漂移，
+      # 一旦没进 Copy Bundle Resources，BundledHolidayProvider 在真机上就找不到文件。
+      - path: SeeingCalendar/Resources/Holidays
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: SeeingCalendar

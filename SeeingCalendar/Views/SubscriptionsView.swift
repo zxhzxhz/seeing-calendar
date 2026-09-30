@@ -18,6 +18,16 @@ struct SubscriptionsView: View {
     @State private var newColor = SubscriptionPalette.color(at: 0)
     @State private var editingSubscription: ICSSubscription?
     @State private var workspaceName = ""
+    @State private var provider = BundledHolidayProvider.shared
+
+    private var coverageText: String {
+        let offDay = provider.table(for: .offDay)
+        let makeUp = provider.table(for: .makeUpWork)
+        let years = Set(offDay.coveredYears).union(makeUp.coveredYears).sorted()
+        guard !years.isEmpty else { return "未加载" }
+        let span = years.count == 1 ? "\(years[0])" : "\(years.first ?? 0)–\(years.last ?? 0)"
+        return "\(span)（放假 \(offDay.restCount) 天 · 补班 \(makeUp.workCount) 天）"
+    }
 
     var body: some View {
         NavigationStack {
@@ -31,6 +41,44 @@ struct SubscriptionsView: View {
                     Text("订阅源（\(subscriptions.count)）")
                 } footer: {
                     Text("订阅作用域可设为全局（所有维度可见）或仅绑定当前维度。ICS 内容只以微型胶囊/彩点呈现，不干扰手绘主视觉。")
+                }
+
+                // 内置假期凭据：本地优先（随包发行，冷启动零网络即可正确着色），可联网取最新版。
+                Section {
+                    LabeledContent("数据来源") {
+                        Text(provider.originText)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("覆盖年份") {
+                        Text(coverageText)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let stamp = provider.updatedAt {
+                        LabeledContent("上游更新于") {
+                            Text(stamp).foregroundStyle(.secondary)
+                        }
+                    }
+                    Button {
+                        Task { await syncHolidays() }
+                    } label: {
+                        HStack {
+                            Label("从上游更新假期数据", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if provider.isSyncing {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }
+                    .disabled(provider.isSyncing)
+                    if let error = provider.lastSyncError {
+                        Text("更新失败：\(error)。已保留本地数据。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("中国节假日（内置）")
+                } footer: {
+                    Text("两条内置凭据默认开启：放假（holidayCal-HO）与调休补班（holidayCal-CO），覆盖 2023–2026。放假与周末用暖色样式，调休上班日与普通工作日用中性样式。更新失败时自动回落到本地数据。")
                 }
 
                 Section("新增订阅") {
@@ -117,7 +165,9 @@ struct SubscriptionsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(subscription.name)
                     .font(.system(size: 14, weight: .medium))
-                Text(subscription.urlString)
+                Text(subscription.isBuiltIn
+                     ? "内置本地凭据 · \(subscription.bundledSource?.fileName ?? "")"
+                     : subscription.urlString)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -171,9 +221,19 @@ struct SubscriptionsView: View {
 
     private func delete(at offsets: IndexSet) {
         for index in offsets {
-            context.delete(subscriptions[index])
+            let subscription = subscriptions[index]
+            // 内置凭据不可删除：它们是本地优先班休数据的唯一来源。
+            // 不想用它请关掉开关（等价于「停用」，且随时可再打开）。
+            guard !subscription.isBuiltIn else { continue }
+            context.delete(subscription)
         }
         try? context.save()
+    }
+
+    /// 联网取最新版假期数据；成功后同时刷新班休着色与抽屉事件列表。
+    private func syncHolidays() async {
+        await provider.syncFromUpstream()
+        await eventStore.refresh(subscriptions: subscriptions, force: true)
     }
 
     private func deleteWorkspace(at offsets: IndexSet) {

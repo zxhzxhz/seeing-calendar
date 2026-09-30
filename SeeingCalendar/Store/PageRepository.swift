@@ -119,6 +119,37 @@ struct PageRepository {
         UserDefaults.standard.set(true, forKey: key)
     }
 
+    // MARK: - 内置 ICS 本地凭据
+
+    /// 幂等播种两条内置节假日订阅（放假 / 调休），默认开启、不可删除。
+    /// 用固定 UUID 做身份锚：老库里即便被误删，下次启动也会重新长出来。
+    @discardableResult
+    func ensureBuiltInSubscriptions() -> Bool {
+        let existing = (try? context.fetch(FetchDescriptor<ICSSubscription>())) ?? []
+        var byUUID: [UUID: ICSSubscription] = [:]
+        for item in existing { byUUID[item.uuid] = item }
+
+        var changed = false
+        for source in BundledHolidaySource.allCases {
+            if let record = byUUID[source.stableUUID] {
+                // 兼容旧记录：补上 isBuiltIn 与最新展示名。
+                if !record.isBuiltIn { record.isBuiltIn = true; changed = true }
+                if record.name != source.subscriptionName { record.name = source.subscriptionName; changed = true }
+                continue
+            }
+            let record = ICSSubscription(uuid: source.stableUUID,
+                                         name: source.subscriptionName,
+                                         urlString: source.urlString,
+                                         colorHex: source.colorHex,
+                                         isEnabled: true,
+                                         isBuiltIn: true)
+            context.insert(record)
+            changed = true
+        }
+        if changed { try? context.save() }
+        return changed
+    }
+
     func deletePage(_ page: DrawingPage) {
         let day = page.day
         removeFiles(for: page)

@@ -47,6 +47,9 @@ jobs:
       - name: Verify canvas transform math (real CoreGraphics)
         run: swift scripts/verify_transform_math.swift --strict   # 不变量不成立即让构建失败
 
+      - name: Verify holiday tables (real bundled ICS + timezone invariants)
+        run: swift scripts/verify_holiday_table.swift --strict   # 班休样式错一天即让构建失败
+
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
