@@ -4,7 +4,7 @@ import Foundation
 enum CalendarUtils {
     static let weekdaySymbols = ["一", "二", "三", "四", "五", "六", "日"]
 
-    static func calendar: Calendar {
+    static var calendar: Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
         cal.firstWeekday = 2          // 周一

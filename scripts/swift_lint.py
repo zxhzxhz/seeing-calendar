@@ -64,6 +64,26 @@ PITFALLS: list[tuple[str, str, int, str]] = [
 ]
 
 
+#: 声明形状门禁：v1.0.17 的 `static var calendar` 被全局文本替换误伤成
+#: `static func calendar`，烧了一整轮 CI（10 分钟）才发现：swiftc 的报错是
+#: `expected '(' in argument list`，指向第 7 行，与真正被改坏的那一行毫无关系，
+#: 光看报错极难定位。属性写成函数这个形状必须机器拦。
+SHAPE_RE = re.compile(
+    r"^[ 	]*(?:@\w+(?:\([^)]*\))?\s*)*"
+    r"(?:public\s+|private\s+|internal\s+|fileprivate\s+|open\s+|static\s+|final\s+|class\s+)*"
+    r"func\s+(\w+)\s*:\s*[A-Z]",
+    re.M,
+)
+
+
+def check_shapes(rel, stripped, problems):
+    for match in SHAPE_RE.finditer(stripped):
+        problems.append(
+            f"{rel}: 属性疑似被写成了函数 —— `func {match.group(1)}: T {{`。"
+            "计算属性必须写 `var x: T {`；若是函数则需写 `func x() -> T {`。"
+        )
+
+
 def check_pitfalls(rel: str, stripped: str, problems: list[str]) -> None:
     for prefix, keyword, window, reason in PITFALLS:
         cursor = 0
@@ -97,6 +117,7 @@ def main() -> int:
         for match in DECL_RE.finditer(source):
             declarations[match.group(2)].append(path.name)
         check_pitfalls(str(path.relative_to(root)), stripped, problems)
+        check_shapes(str(path.relative_to(root)), stripped, problems)
 
     duplicates = {name: where for name, where in declarations.items() if len(where) > 1}
 
