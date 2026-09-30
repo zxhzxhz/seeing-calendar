@@ -17,7 +17,8 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     var isCropping: Bool { croppingImageID != nil }
 
     func selectImage(id: UUID, additive: Bool) {
-        guard entity(for: id) != nil else { return }
+        // 锁定贴图不可选中（命中测试已跳过，这里是兜底）。
+        guard let target = entity(for: id), !target.isLocked else { return }
         commitSelection(notify: false)
         if additive, selectedImageIDs.contains(id) {
             selectedImageIDs.removeAll { $0 == id }
@@ -509,7 +510,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     // MARK: - 套索
 
     func selectionOverlay(_ overlay: SelectionOverlayView, didCompleteLasso points: [CGPoint]) {
-        let snapshots = imageViews.map { UnifiedLassoArbitrator.ImageSnapshot(id: $0.itemID, quad: $0.worldQuad) }
+        let snapshots = imageViews.map {
+            UnifiedLassoArbitrator.ImageSnapshot(id: $0.itemID, quad: $0.worldQuad, isLocked: $0.isLocked)
+        }
         let result = UnifiedLassoArbitrator.evaluate(lasso: points, drawing: canvasView.drawing, images: snapshots)
         guard !result.strokeIndices.isEmpty || !result.imageIDs.isEmpty else {
             clearSelection()
@@ -572,6 +575,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             bringSelectionToFront()
         case .sendToBack:
             sendSelectionToBack()
+        case .lock:
+            lockSelectedImages()
+        case .unlock:
+            unlockAllImages()
         }
     }
 

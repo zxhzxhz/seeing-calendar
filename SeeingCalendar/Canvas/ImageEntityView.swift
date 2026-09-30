@@ -11,6 +11,7 @@ final class ImageEntityView: UIImageView {
     var cropRect: CGRect
     var naturalSize: CGSize
     var zIndex: Int
+    private(set) var isLocked: Bool
 
     var onSelect: ((ImageEntityView) -> Void)?
     var onBeginMove: ((ImageEntityView) -> Void)?
@@ -38,6 +39,7 @@ final class ImageEntityView: UIImageView {
         self.cropRect = item.cropRect
         self.naturalSize = item.naturalSize
         self.zIndex = item.zIndex
+        self.isLocked = item.isLocked
         self.sourceImage = item.image
         super.init(frame: .zero)
 
@@ -80,7 +82,8 @@ final class ImageEntityView: UIImageView {
                         worldTransform: worldTransform,
                         cropRect: cropRect,
                         naturalSize: naturalSize,
-                        zIndex: zIndex)
+                        zIndex: zIndex,
+                        isLocked: isLocked)
     }
 
     /// 将模型矩阵投影到 UIKit 视图（center + 线性变换，二者组合等价于 worldTransform）。
@@ -106,6 +109,34 @@ final class ImageEntityView: UIImageView {
     func update(transform newTransform: CGAffineTransform) {
         worldTransform = newTransform
         applyWorldTransform()
+    }
+
+    /// 锁定态的视觉角标（右上角小锁）。
+    private lazy var lockBadge: UIImageView = {
+        let view = UIImageView(image: UIImage(systemName: "lock.fill"))
+        view.tintColor = .secondaryLabel
+        view.contentMode = .scaleAspectFit
+        view.isHidden = true
+        addSubview(view)
+        return view
+    }()
+
+    func setLocked(_ locked: Bool) {
+        isLocked = locked
+        lockBadge.isHidden = !locked
+        if locked { setHighlighted(false) }
+        layoutLockBadge()
+    }
+
+    private func layoutLockBadge() {
+        guard !lockBadge.isHidden else { return }
+        let side = max(10, min(bounds.width, bounds.height) * 0.18)
+        lockBadge.frame = CGRect(x: bounds.width - side - 3, y: 3, width: side, height: side)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutLockBadge()
     }
 
     /// 选中态临时高亮（不改变任何几何，纯视觉提示）。

@@ -456,7 +456,7 @@ final class SelectionOverlayView: UIView {
         case .cropping:
             return [.finishCrop, .cancelCrop]
         case .image:
-            return [.copy, .crop, .replace, .bringToFront, .sendToBack, .delete]
+            return [.copy, .crop, .replace, .bringToFront, .sendToBack, .lock, .delete]
         }
     }
 

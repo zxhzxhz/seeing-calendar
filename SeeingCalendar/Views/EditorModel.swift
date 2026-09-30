@@ -93,10 +93,10 @@ final class EditorModel {
     private(set) var canRedo = false
     var hasClipboard = false
     var isCanvasExpanded = false
-    /// 是否有触摸落在画纸（可绘画区域）内（由 CanvasHostView 上报）。
-    var isPaperTouchActive = false
-    /// 是否有选区手势进行中（拖动/裁剪/缩放，由容器上报）。
-    var isSelectionGestureActive = false
+    /// 当前页面已锁定的贴图数量（供「解锁全部贴图」菜单项显示与可用性）。
+    var lockedImageCount = 0
+    /// 下拉返回主页面（画纸留白处 / 顶部标签行触发）。
+    var onRequestDismiss: (() -> Void)?
     var isReplacingImage = false
     var replaceTargetID: UUID?
     var note: String
@@ -161,19 +161,14 @@ final class EditorModel {
             self.replaceTargetID = id
             self.isReplacingImage = true
         }
-        host.onPaperTouchChanged = { [weak self] active in
-            Task { @MainActor in
-                guard let self else { return }
-                if self.isPaperTouchActive != active {
-                    self.isPaperTouchActive = active
-                }
-            }
+        host.onRequestDismiss = { [weak self] in
+            self?.onRequestDismiss?()
         }
-        host.canvas.onAdjustingSelectionChanged = { [weak self] active in
+        host.canvas.onLockedCountChanged = { [weak self] count in
             Task { @MainActor in
                 guard let self else { return }
-                if self.isSelectionGestureActive != active {
-                    self.isSelectionGestureActive = active
+                if self.lockedImageCount != count {
+                    self.lockedImageCount = count
                 }
             }
         }
@@ -476,12 +471,20 @@ final class EditorModel {
     /// 是否处于「无工具 / 导航」状态。
     var isNavigating: Bool { activeTool == nil }
 
-    /// 是否应锁住「交互式下拉返回」。
-    /// 命中条件：① 落笔在画纸（可绘画区域）内；② 或贴图/选区手势正在继续
-    /// —— 后者覆盖"贴图被拖到画纸之外仍在编辑"的例外情况。
-    /// 页条 / 工具栏 / 画布留白处不满足任一条件 → 照常可下拉返回主页面。
-    var isCanvasInteractionActive: Bool {
-        isPaperTouchActive || isSelectionGestureActive
+    /// 是否选中了单张贴图（用于「锁定选中贴图」菜单项）。
+    var isSingleImageSelected: Bool {
+        if case .image = selectionKind { return true }
+        return false
+    }
+
+    /// 锁定当前选中的贴图。
+    func lockSelectedImages() {
+        canvasHost?.canvas.lockSelectedImages()
+    }
+
+    /// 解锁本页全部贴图。
+    func unlockAllImages() {
+        canvasHost?.canvas.unlockAllImages()
     }
 
     /// 套索 —— 与笔墨工具互斥。

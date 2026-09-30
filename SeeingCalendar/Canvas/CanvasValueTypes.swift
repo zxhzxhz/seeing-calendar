@@ -16,6 +16,8 @@ struct CanvasImageItem: Identifiable {
     var cropRect: CGRect
     var naturalSize: CGSize
     var zIndex: Int
+    /// 锁定的贴图不可被选中/移动/套索圈选。
+    var isLocked: Bool = false
 
     /// 是否位于手绘笔迹之上。
     var isInFront: Bool { zIndex >= CanvasLayers.frontBase }
@@ -48,6 +50,8 @@ enum SelectionAction: Equatable {
     case replace
     case bringToFront
     case sendToBack
+    case lock
+    case unlock
 
     var title: String {
         switch self {
@@ -62,6 +66,8 @@ enum SelectionAction: Equatable {
         case .replace: return "替换"
         case .bringToFront: return "置顶（笔迹之上）"
         case .sendToBack: return "置底"
+        case .lock: return "锁定贴图"
+        case .unlock: return "解锁贴图"
         }
     }
 
@@ -78,6 +84,8 @@ enum SelectionAction: Equatable {
         case .replace: return "arrow.triangle.2.circlepath"
         case .bringToFront: return "square.3.layers.3d.top.filled"
         case .sendToBack: return "square.3.layers.3d.bottom.filled"
+        case .lock: return "lock.fill"
+        case .unlock: return "lock.open.fill"
         }
     }
 }

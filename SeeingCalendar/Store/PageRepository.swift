@@ -171,7 +171,8 @@ struct PageRepository {
                                          worldTransform: record.worldTransform,
                                          cropRect: record.cropRectOnImage,
                                          naturalSize: record.naturalSize,
-                                         zIndex: record.zIndex))
+                                         zIndex: record.zIndex,
+                                         isLocked: record.isLocked))
         }
         return items
     }
@@ -190,13 +191,15 @@ struct PageRepository {
                 record.naturalWidth = Double(item.naturalSize.width)
                 record.naturalHeight = Double(item.naturalSize.height)
                 record.zIndex = item.zIndex
+                record.isLocked = item.isLocked
             } else {
                 let record = ImageRecord(uuid: item.id,
                                          fileName: item.fileName,
                                          transform: item.worldTransform,
                                          cropRect: item.cropRect,
                                          naturalSize: item.naturalSize,
-                                         zIndex: item.zIndex)
+                                         zIndex: item.zIndex,
+                                         isLocked: item.isLocked)
                 context.insert(record)
                 record.page = page
             }

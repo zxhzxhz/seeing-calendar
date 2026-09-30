@@ -24,6 +24,8 @@ struct DayEditorView: View {
     @State private var isDeletePageConfirmPresented = false
     @State private var isColorPickerPresented = false
     @State private var isPageManagerPresented = false
+    /// 顶部标签行 / 页条下拉返回的进行中标记。
+    @State private var isPullDownDismissing = false
 
     var body: some View {
         Group {
@@ -38,6 +40,8 @@ struct DayEditorView: View {
                 let created = EditorModel(day: day, workspace: workspace, context: context)
                 created.setInitialPage(initialPageIndex)
                 created.isFingerDrawingEnabled = isFingerDrawingEnabled
+                // 画纸留白处下拉 → 返回主页面（手势实现见 CanvasHostView）。
+                created.onRequestDismiss = { dismiss() }
                 model = created
             }
         }
@@ -56,12 +60,12 @@ struct DayEditorView: View {
                 toolBar(model: model)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent(model: model) }
-            // 交互式下拉返回：**仅在画布视口内**禁用（含图片操作进行中）。
-            // 页条 / 工具栏 / 顶部导航等区域照常可下拉返回主页面。
-            .interactiveDismissDisabled(model.isCanvasInteractionActive)
+            // 系统的交互式消失手势无法按区域开关，且动态开关本身不可靠 —— 一律禁用，
+            // 改为在指定区域自实现下拉返回：顶部标签行 / 页条 / 画纸四周留白。
+            // （画纸之内绝不响应，避免绘制与拖动手势被误判为返回。）
+            .interactiveDismissDisabled(true)
             .onDisappear {
                 model.finishEditing()
                 // 编辑过程中不回写全局开关（会触发外层重渲染并打断 UIKit 状态），关闭时统一回写。
@@ -188,6 +192,8 @@ struct DayEditorView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
+        // 页条同样支持下拉返回（横向滚动由 ScrollView 负责，纵向拖动交给这里）
+        .simultaneousGesture(pullDownToDismiss)
     }
 
     // MARK: - 提示条
@@ -428,8 +434,35 @@ struct DayEditorView: View {
         .padding(16)
     }
 
+    /// 顶部标签行 / 页条的下拉返回手势：
+    /// 只认「向下为主」的拖动，位移 > 90pt 或预测位移 > 180pt 即返回主页面。
+    private var pullDownToDismiss: some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { value in
+                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                isPullDownDismissing = true
+            }
+            .onEnded { value in
+                defer { isPullDownDismissing = false }
+                guard isPullDownDismissing else { return }
+                let distance = value.translation.height
+                let projected = value.predictedEndTranslation.height
+                guard distance > 90 || projected > 180 else { return }
+                dismiss()
+            }
+    }
+
     @ToolbarContentBuilder
     private func toolbarContent(model: EditorModel) -> some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Text(model.title)
+                .font(.system(size: 16, weight: .semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(pullDownToDismiss)
+        }
+
         ToolbarItem(placement: .topBarLeading) {
             Button("完成") {
                 model.finishEditing()
@@ -456,6 +489,21 @@ struct DayEditorView: View {
                     } label: {
                         Label("从文件导入", systemImage: "folder")
                     }
+                }
+                Section("贴图锁定") {
+                    Button {
+                        model.lockSelectedImages()
+                    } label: {
+                        Label("锁定选中贴图", systemImage: "lock.fill")
+                    }
+                    .disabled(!model.isSingleImageSelected)
+
+                    Button {
+                        model.unlockAllImages()
+                    } label: {
+                        Label("解锁全部贴图（\(model.lockedImageCount)）", systemImage: "lock.open.fill")
+                    }
+                    .disabled(model.lockedImageCount == 0)
                 }
                 Section("画布") {
                     Button {

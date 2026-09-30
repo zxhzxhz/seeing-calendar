@@ -10,32 +10,42 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// (当前缩放, 适配置缩放) —— 供 SwiftUI 层驱动“最大化 / 缩小”按钮状态。
     var onZoomChange: ((CGFloat, CGFloat) -> Void)?
 
-    /// 是否有触摸按在**画纸（可绘画区域）内**。
-    /// 用于按区域门控「交互式下拉返回」：画纸内禁止；页条/工具栏/画布留白处放行。
-    /// 只在落笔瞬间判定一次，拖拽中途不翻转（否则拖出画纸时手势会被突然放开）。
-    var onPaperTouchChanged: ((Bool) -> Void)?
+    /// 在「画纸之外」（缩小时暴露的四周留白）向下拖动释放时回调，用于返回主页面。
+    /// 系统交互式消失手势已在编辑器层永久禁用（它无法按区域开关），
+    /// 因此这里自实现区域化下拉：只有留白处起手才接管，画纸内绝不抢手势。
+    var onRequestDismiss: (() -> Void)?
 
-    private lazy var touchObserver: UILongPressGestureRecognizer = {
-        let gesture = UILongPressGestureRecognizer(target: self, action: #selector(handleTouchObserver(_:)))
-        gesture.minimumPressDuration = 0
-        gesture.allowableMovement = .greatestFiniteMagnitude
+    private var pullDownEngaged = false
+
+    private lazy var pullDown: UIPanGestureRecognizer = {
+        let gesture = UIPanGestureRecognizer(target: self, action: #selector(handlePullDown(_:)))
+        gesture.minimumNumberOfTouches = 1
+        gesture.maximumNumberOfTouches = 1
         gesture.cancelsTouchesInView = false
-        gesture.delaysTouchesBegan = false
-        gesture.delaysTouchesEnded = false
         gesture.delegate = self
         return gesture
     }()
 
-    @objc private func handleTouchObserver(_ gesture: UILongPressGestureRecognizer) {
+    @objc private func handlePullDown(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
-        case .began:
-            let pointInCanvas = canvas.convert(gesture.location(in: self), from: self)
-            onPaperTouchChanged?(canvas.bounds.contains(pointInCanvas))
-        case .ended, .cancelled, .failed:
-            onPaperTouchChanged?(false)
+        case .ended:
+            guard pullDownEngaged else { return }
+            pullDownEngaged = false
+            let translation = gesture.translation(in: self)
+            let velocity = gesture.velocity(in: self)
+            if translation.y > 90 || velocity.y > 700 {
+                onRequestDismiss?()
+            }
+        case .cancelled, .failed:
+            pullDownEngaged = false
         default:
             break
         }
+    }
+
+    /// 该点是否落在画纸（可绘画区域）内。
+    func isInsidePaper(_ point: CGPoint) -> Bool {
+        canvas.bounds.contains(canvas.convert(point, from: self))
     }
 
     private var didPerformInitialFit = false
@@ -69,7 +79,7 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         canvas.frame = CGRect(origin: .zero, size: CompositeCanvasContainerView.canvasSize)
         scrollView.addSubview(canvas)
 
-        addGestureRecognizer(touchObserver)
+        addGestureRecognizer(pullDown)
     }
 
     override func layoutSubviews() {
@@ -168,6 +178,19 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         true
+    }
+
+    /// 下拉返回只在「画纸之外」起手、且以向下为主时才开始识别。
+    nonisolated func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        MainActor.assumeIsolated {
+            guard gestureRecognizer === pullDown,
+                  let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+            guard !isInsidePaper(pan.location(in: self)) else { return false }
+            let velocity = pan.velocity(in: self)
+            guard velocity.y > abs(velocity.x) else { return false }
+            pullDownEngaged = true
+            return true
+        }
     }
 
     /// 导航态（取消全部工具 / 笔画）：禁止落笔，单指即可平移，双指缩放。

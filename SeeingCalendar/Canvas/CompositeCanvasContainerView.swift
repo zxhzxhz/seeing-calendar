@@ -43,15 +43,10 @@ final class CompositeCanvasContainerView: UIView {
     var isGroupTransforming = false
     /// 任何「正在拖拽选区」的状态（手柄 / 贴图位移 / 整体变换）——
     /// 期间只做几何更新，绝不重建手柄，也绝不重弹菜单。
-    var isAdjustingSelection = false {
-        didSet {
-            guard oldValue != isAdjustingSelection else { return }
-            onAdjustingSelectionChanged?(isAdjustingSelection)
-        }
-    }
+    var isAdjustingSelection = false
 
-    /// 选区手势状态回调：用于在图片操作期间锁住「交互式下拉返回」。
-    var onAdjustingSelectionChanged: ((Bool) -> Void)?
+    /// 锁定贴图数量变化回调（供编辑器的「解锁全部贴图」菜单项显示数量与可用性）。
+    var onLockedCountChanged: ((Int) -> Void)?
     var croppingImageID: UUID?
     var floatingPreview: UIImageView?
     var gestureBaseTransform: CGAffineTransform?
@@ -238,16 +233,28 @@ final class CompositeCanvasContainerView: UIView {
             return selectionOverlay
         }
 
-        // 4. 空白区域交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
-        guard canvasView.isUserInteractionEnabled else { return nil }
-        return canvasView.hitTest(convert(point, to: canvasView), with: event)
+        // 4. 画布内：交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
+        if canvasView.isUserInteractionEnabled {
+            let local = convert(point, to: canvasView)
+            if let hit = canvasView.hitTest(local, with: event) {
+                return hit
+            }
+        }
+
+        // 5. 画纸之外的空白（缩小时暴露的四周留白）：接管为「空白区域」，
+        //    使得"点画纸外"与"点画纸内空白处"行为一致（取消选中 / 弹菜单）。
+        //    接管后事件不会再落到滚动视图，但双指平移缩放依赖手势识别器（作用于整棵子树），不受影响。
+        return self
     }
 
     /// 命中测试：返回该点最上层的贴图实体（临时置顶层 → 前置层 → 后置层）。
+    /// **锁定贴图直接跳过** —— 锁定后完全惰性：不可选中、不可移动，
+    /// 也因此不会截断绘制事件（可以在锁定素材之上直接画）。
     func imageEntity(at point: CGPoint) -> ImageEntityView? {
         for container in [selectionTopContainerView, imageFrontContainerView, imageContainerView] {
             for subview in container.subviews.reversed() {
                 guard let entity = subview as? ImageEntityView, !entity.isHidden, entity.alpha > 0.01 else { continue }
+                guard !entity.isLocked else { continue }
                 let local = entity.convert(point, from: self)
                 if entity.bounds.contains(local) {
                     return entity
@@ -273,14 +280,11 @@ final class CompositeCanvasContainerView: UIView {
         //    - 裁剪态下同样不改选，避免误触退出裁剪；
         //    - 套索态（非变形态）下触摸会被内部拖动区/套索层接管，贴图自身手势收不到事件，
         //      因此由容器代劳选中并弹菜单。
-        if !isGroupTransforming, croppingImageID == nil {
-            for entity in imageViews.reversed() where !entity.isHidden && entity.alpha > 0.01 {
-                if entity.bounds.contains(entity.convert(point, from: self)) {
-                    selectImage(id: entity.itemID, additive: false)
-                    selectionOverlay.presentMenu()
-                    return
-                }
-            }
+        if !isGroupTransforming, croppingImageID == nil,
+           let entity = imageEntity(at: point) {   // 已跳过锁定贴图
+            selectImage(id: entity.itemID, additive: false)
+            selectionOverlay.presentMenu()
+            return
         }
 
         // 3) 点在选区内（非手柄）：保持选中与当前模式，并弹出编辑菜单
@@ -351,10 +355,12 @@ final class CompositeCanvasContainerView: UIView {
             imageFrontContainerView.addSubview(entity)
             imageViews.append(entity)
         }
+        notifyLockState()
     }
 
     func makeEntity(_ item: CanvasImageItem) -> ImageEntityView {
         let entity = ImageEntityView(item: item)
+        entity.setLocked(item.isLocked)
         entity.onSelect = { [weak self] view in
             self?.selectImage(id: view.itemID, additive: false)
         }
@@ -381,6 +387,44 @@ final class CompositeCanvasContainerView: UIView {
             self.onContentChange?()
         }
         return entity
+    }
+
+    // MARK: - 锁定贴图
+
+    var lockedImageCount: Int {
+        imageViews.filter(\.isLocked).count
+    }
+
+    func notifyLockState() {
+        onLockedCountChanged?(lockedImageCount)
+    }
+
+    /// 锁定 / 解锁指定贴图。锁定后立即取消其选中态。
+    func setLocked(_ locked: Bool, for ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        var changed = false
+        for id in ids {
+            guard let entity = entity(for: id), entity.isLocked != locked else { continue }
+            entity.setLocked(locked)
+            changed = true
+        }
+        guard changed else { return }
+        if locked {
+            commitSelection(notify: false)
+            notifySelection()
+        }
+        notifyLockState()
+        onContentChange?()
+    }
+
+    func lockSelectedImages() {
+        pushHistory()
+        setLocked(true, for: selectedImageIDs)
+    }
+
+    func unlockAllImages() {
+        pushHistory()
+        setLocked(false, for: imageViews.map(\.itemID))
     }
 
     /// 按图层归属放置视图；`elevated` 表示临时置顶（选中态）。

@@ -126,6 +126,8 @@ final class ImageRecord {
     var naturalWidth: Double
     var naturalHeight: Double
     var zIndex: Int
+    /// 锁定后不可被选中/移动：用于把已排版好的素材固定为"底板"。
+    var isLocked: Bool = false
     var page: DrawingPage?
 
     init(uuid: UUID = UUID(),
@@ -133,7 +135,8 @@ final class ImageRecord {
          transform: CGAffineTransform,
          cropRect: CGRect,
          naturalSize: CGSize,
-         zIndex: Int) {
+         zIndex: Int,
+         isLocked: Bool = false) {
         self.uuid = uuid
         self.fileName = fileName
         self.a = transform.a
@@ -149,6 +152,7 @@ final class ImageRecord {
         self.naturalWidth = naturalSize.width
         self.naturalHeight = naturalSize.height
         self.zIndex = zIndex
+        self.isLocked = isLocked
     }
 
     var worldTransform: CGAffineTransform {

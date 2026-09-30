@@ -7,6 +7,7 @@ enum UnifiedLassoArbitrator {
     struct ImageSnapshot {
         var id: UUID
         var quad: [CGPoint]
+        var isLocked: Bool = false
     }
 
     struct Result {
@@ -36,6 +37,7 @@ enum UnifiedLassoArbitrator {
 
         // 2. 贴图层：**与套索区域重叠即命中**（不再要求四角/中心点落入）。
         for image in images {
+            guard !image.isLocked else { continue }   // 锁定贴图不参与圈选
             let quadBounds = CanvasGeometry.boundingBox(image.quad)
             guard !quadBounds.isNull, quadBounds.intersects(lassoBounds) else { continue }
             if CanvasGeometry.polygonsIntersect(lasso, image.quad) {
