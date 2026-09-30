@@ -1,6 +1,13 @@
 import PencilKit
 import UIKit
 
+/// 触摸来源：用于区分 Apple Pencil 与手指（套索与橡皮指示圈都依赖它）。
+enum TouchKind {
+    case pencil
+    case finger
+    case unknown
+}
+
 /// 复合画布容器（Layer 0~6 的宿主）。
 /// 核心职责：① 层级装配；② 触碰第一纳秒的贴图命中截流；③ 历史栈；④ 选区状态机入口。
 @MainActor
@@ -136,11 +143,15 @@ final class CompositeCanvasContainerView: UIView {
         addSubview(imageFrontContainerView)
 
         addSubview(eraserIndicator)
-        canvasView.onTouchPoint = { [weak self] point in
+        canvasView.onTouch = { [weak self] point, touchType in
             guard let self else { return }
-            // 仅在橡皮激活时显示有效范围圈；其余工具下彻底隐藏。
-            self.eraserIndicator.isHidden = !self.isEraserActive
-            self.eraserIndicator.update(point: self.isEraserActive ? point : nil)
+            // 有效范围圈只在"这次触摸真的会擦除"时显示：
+            // 橡皮激活 + （手指书写开启 或 这一下是 Apple Pencil）。
+            // 手指开关关闭时用手指标橡皮既不擦除、也不该显示圆圈。
+            let canErase = self.isFingerDrawingEnabled || touchType == .pencil
+            let shouldShow = self.isEraserActive && canErase
+            self.eraserIndicator.isHidden = !shouldShow
+            self.eraserIndicator.update(point: shouldShow ? point : nil)
         }
 
         selectionContentContainer.backgroundColor = .clear
@@ -184,15 +195,25 @@ final class CompositeCanvasContainerView: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
 
-        // 1. 选区覆盖层优先（手柄 / 套索捕获）
         let overlayPoint = convert(point, to: selectionOverlay)
-        if selectionOverlay.point(inside: overlayPoint, with: event),
+        let kind = touchKind(in: event)
+
+        // 1. 手柄 / 浮动菜单 / 变形态内部拖动区：手指与 Pencil 都可操作。
+        //    （这是"手指开关关闭时手指仍可操控控制点"的实现路径。）
+        if selectionOverlay.hitsInteractiveElement(overlayPoint),
            let hit = selectionOverlay.hitTest(overlayPoint, with: event) {
             return hit
         }
 
-        // 2. 贴图命中：临时置顶层 → 前置层 → 后置层，逆序遍历保证顶层优先；
+        // 2. Apple Pencil 在套索模式下：套索优先于贴图 —— 只有笔能画套索，
+        //    笔尖落在贴图上时也应允许起手套索（套索重叠判定会把它圈进来）。
+        if isLassoActive, kind == .pencil {
+            return selectionOverlay
+        }
+
+        // 3. 贴图命中：临时置顶层 → 前置层 → 后置层，逆序遍历保证顶层优先；
         //    命中即短路 PKCanvasView 的绘制手势，从底座杜绝“选中贴图同时画出污点”。
+        //    手指开关关闭时，手指点贴图依然进入贴图编辑态（需求 4）。
         for container in [selectionTopContainerView, imageFrontContainerView, imageContainerView] {
             for subview in container.subviews.reversed() {
                 guard let entity = subview as? ImageEntityView, !entity.isHidden, entity.alpha > 0.01 else { continue }
@@ -203,9 +224,26 @@ final class CompositeCanvasContainerView: UIView {
             }
         }
 
-        // 3. 空白区域交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
+        // 4. 手指在套索模式下：仅当"手指书写"开启时才由手指画套索；
+        //    关闭时手指不画套索，落到画布层（画布在套索态不可写 → 等价于仅可平移缩放）。
+        if isLassoActive, kind != .pencil, isFingerDrawingEnabled {
+            return selectionOverlay
+        }
+
+        // 5. 空白区域交给 PencilKit（是否响应取决于 drawingPolicy / 是否处于导航态）
         guard canvasView.isUserInteractionEnabled else { return nil }
         return canvasView.hitTest(convert(point, to: canvasView), with: event)
+    }
+
+    /// 判定本次事件里的触摸来自 Apple Pencil 还是手指。
+    /// 优先取"刚开始"的那一个触摸，避免多指场景下误判。
+    private func touchKind(in event: UIEvent?) -> TouchKind {
+        guard let touches = event?.allTouches, !touches.isEmpty else { return .unknown }
+        let began = touches.filter { $0.phase == .began }
+        let candidates = began.isEmpty ? touches : began
+        if candidates.contains(where: { $0.type == .pencil }) { return .pencil }
+        if candidates.contains(where: { $0.type == .direct }) { return .finger }
+        return .unknown
     }
 
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {

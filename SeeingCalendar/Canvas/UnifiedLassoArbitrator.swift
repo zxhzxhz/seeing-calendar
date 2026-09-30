@@ -34,14 +34,11 @@ enum UnifiedLassoArbitrator {
             }
         }
 
-        // 2. 贴图层：四角 + 中心任一点落入套索即命中
+        // 2. 贴图层：**与套索区域重叠即命中**（不再要求四角/中心点落入）。
         for image in images {
             let quadBounds = CanvasGeometry.boundingBox(image.quad)
             guard !quadBounds.isNull, quadBounds.intersects(lassoBounds) else { continue }
-            let center = CGPoint(x: quadBounds.midX, y: quadBounds.midY)
-            let hit = image.quad.contains { CanvasGeometry.polygon(lasso, contains: $0) }
-                || CanvasGeometry.polygon(lasso, contains: center)
-            if hit {
+            if CanvasGeometry.polygonsIntersect(lasso, image.quad) {
                 result.imageIDs.append(image.id)
                 result.bounds = result.bounds.isNull ? quadBounds : result.bounds.union(quadBounds)
             }

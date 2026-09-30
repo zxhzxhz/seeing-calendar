@@ -6,8 +6,12 @@ import UIKit
 /// 因此这里挂一个「零时长长按」识别器 + 允许手势共存，只做位置上报、绝不干扰绘制。
 @MainActor
 final class TrackingCanvasView: PKCanvasView {
-    /// 画布坐标系（世界坐标）里的当前触点；手指/笔离开时为 nil。
-    var onTouchPoint: ((CGPoint?) -> Void)?
+    /// 画布坐标系（世界坐标）里的当前触点 + 触摸来源；手指/笔离开时 point 为 nil。
+    var onTouch: ((CGPoint?, UITouch.TouchType) -> Void)?
+
+    /// 最近一次落笔的来源（Pencil / 手指）。
+    /// UILongPressGestureRecognizer 不暴露触摸类型，因此由 touchesBegan 记录。
+    private var activeTouchType: UITouch.TouchType = .direct
 
     private lazy var tracker: UILongPressGestureRecognizer = {
         let gesture = UILongPressGestureRecognizer(target: self, action: #selector(handleTracker(_:)))
@@ -29,12 +33,19 @@ final class TrackingCanvasView: PKCanvasView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        if let touch = touches.first {
+            activeTouchType = touch.type
+        }
+    }
+
     @objc private func handleTracker(_ gesture: UILongPressGestureRecognizer) {
         switch gesture.state {
         case .began, .changed:
-            onTouchPoint?(gesture.location(in: self))
+            onTouch?(gesture.location(in: self), activeTouchType)
         case .ended, .cancelled, .failed:
-            onTouchPoint?(nil)
+            onTouch?(nil, activeTouchType)
         default:
             break
         }

@@ -40,7 +40,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
         selectedStrokes = strokes
         selectedImageIDs = imageIDs
-        isGroupTransforming = false
+        // 需求：套索选中**含笔迹**的对象（含"笔迹+贴图"混合）即默认进入变形态，
+        // 保证缩放/旋转后仍留在变形态，连续编辑不被打断。
+        // 纯贴图选择不进入变形态：单张 → 贴图编辑态；多张 → 复合态（可再点"变形"进入）。
+        isGroupTransforming = !strokes.isEmpty
         croppingImageID = nil
 
         if !strokes.isEmpty {
