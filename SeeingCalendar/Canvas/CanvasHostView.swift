@@ -181,16 +181,15 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     }
 
     /// 下拉返回只在「画纸之外」起手、且以向下为主时才开始识别。
-    nonisolated func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        MainActor.assumeIsolated {
-            guard gestureRecognizer === pullDown,
-                  let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-            guard !isInsidePaper(pan.location(in: self)) else { return false }
-            let velocity = pan.velocity(in: self)
-            guard velocity.y > abs(velocity.x) else { return false }
-            pullDownEngaged = true
-            return true
-        }
+    /// 注意：UIView 自身已实现 `gestureRecognizerShouldBegin`（UIKit 内部扩展），必须写 override。
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === pullDown,
+              let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        guard !isInsidePaper(pan.location(in: self)) else { return false }
+        let velocity = pan.velocity(in: self)
+        guard velocity.y > abs(velocity.x) else { return false }
+        pullDownEngaged = true
+        return true
     }
 
     /// 导航态（取消全部工具 / 笔画）：禁止落笔，单指即可平移，双指缩放。
