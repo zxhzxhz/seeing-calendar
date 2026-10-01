@@ -55,7 +55,7 @@ enum ThumbnailLoadPolicy {
     static let batchSize = 8
 
     @discardableResult
-    static func merge<T>(_ local: inout [String: T],
+    static func merge<T: Equatable>(_ local: inout [String: T],
                          resolved: [String: T],
                          dropped: Set<String>) -> Int {
         var touched = 0
@@ -108,7 +108,7 @@ final class FakeStore: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: renderDelay)
                 rendersInProgress -= 1
             }
-            let produced = memory[name] == nil ? "img:\(name)" : memory[name]
+            let produced = memory[name] ?? "img:\(name)"
             memory[name] = produced
             return produced
         }
@@ -249,12 +249,12 @@ func verifyDropOnInvalidate() async {
 
 // MARK: - 断言 5：整表覆盖是罪魁（回归护栏：merge 不得删除未提及的键）
 
-func verifyMergeIsNonDestructive() async {
+func verifyMergeIsNonDestructive() {
     var local: [String: String] = ["a": "1", "b": "2", "c": "3"]
     ThumbnailLoadPolicy.merge(&local, resolved: ["b": "20"], dropped: ["c"])
     checkEqual(local.count, 2, "merge 后应只剩 a、b")
-    checkEqual(local["a"], "1", "未提及的键 a 必须原样保留")
-    checkEqual(local["b"], "20", "已解析的键应被更新")
+    checkEqual(local["a"], Optional("1"), "未提及的键 a 必须原样保留")
+    checkEqual(local["b"], Optional("20"), "已解析的键应被更新")
     check(local["c"] == nil, "明确失效的键 c 应被移除")
 
     // 旧实现：result 里缺 a 就把 a 抹掉。
@@ -267,10 +267,10 @@ func verifyMergeIsNonDestructive() async {
 
 func verifyGridLayoutPremise() {
     let october = gridKeys(forMonth: 10)
-    check(october.first == "2026-09-27", "2026-10 网格首格应为 09-27（周日起）")
+    checkEqual(october.first, Optional("2026-09-27"), "2026-10 网格首格应为 09-27（周日起）")
     check(october.contains("2026-09-30"), "2026-10 网格必须含 09-30（前置格）")
     let november = gridKeys(forMonth: 11)
-    check(november.first == "2026-10-25", "2026-11 网格首格应为 10-25")
+    checkEqual(november.first, Optional("2026-10-25"), "2026-11 网格首格应为 10-25")
     check(!november.contains("2026-09-30"), "2026-11 网格不含 09-30")
     let september = gridKeys(forMonth: 9)
     check(september.contains("2026-09-30"), "2026-09 网格必须含 09-30")
