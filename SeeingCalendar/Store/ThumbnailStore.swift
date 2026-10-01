@@ -51,7 +51,7 @@ final class ThumbnailStore {
     func invalidateAll() {
         memory.removeAllObjects()
         let files = (try? FileManager.default.contentsOfDirectory(at: AppPaths.thumbnails,
-                                                                 includingPropertiesForKey: nil)) ?? []
+                                                                 includingPropertiesForKeys: nil)) ?? []
         for file in files {
             try? FileManager.default.removeItem(at: file)
         }

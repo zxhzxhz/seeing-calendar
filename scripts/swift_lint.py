@@ -75,6 +75,12 @@ SHAPE_RE = re.compile(
     re.M,
 )
 
+#: 参数列表里连续两个裸标识符（`_ a b:` 形状）。真实踩过：
+#:     static func merge<T: Equatable>(_ into local: inout [String: T], ...)
+#: swiftc 26.3 / -swift-version 6 报：
+#:     error: expected ':' following argument label and parameter name
+PARAM_LABEL_RE = re.compile(r"\(\s*_\s+(\w+)\s+(\w+)\s*:")
+
 
 #: EquatableView 的构造形状。真实声明（SwiftUI.swiftinterface）：
 #:     @frozen public struct EquatableView<Content> : View where Content : Equatable, Content : View {
@@ -112,6 +118,19 @@ def check_shapes(rel, stripped, problems):
         )
 
 
+def check_param_labels(rel, stripped, problems):
+    # 真实踩过的坑：`func merge<T: Equatable>(_ into local: inout [String: T], ...)`
+    # 会被 swiftc 报 `expected ':' following argument label and parameter name`
+    # （1.0.18 的 CI 才暴露）。参数一律用 `_ name: T` 的单名形式。
+    for match in PARAM_LABEL_RE.finditer(stripped):
+        line = stripped.count("\n", 0, match.start()) + 1
+        problems.append(
+            f"{rel}:{line}: 参数列表出现两个裸标识符 `({match.group(1)} {match.group(2)}:` —— "
+            "swiftc 会报 `expected ':' following argument label and parameter name`。"
+            "请写成 `_ name: T` 的单名形式。"
+        )
+
+
 def check_pitfalls(rel: str, stripped: str, problems: list[str]) -> None:
     for prefix, keyword, window, reason in PITFALLS:
         cursor = 0
@@ -146,6 +165,7 @@ def main() -> int:
             declarations[match.group(2)].append(path.name)
         check_pitfalls(str(path.relative_to(root)), stripped, problems)
         check_shapes(str(path.relative_to(root)), stripped, problems)
+        check_param_labels(str(path.relative_to(root)), stripped, problems)
         check_wrapper_calls(str(path.relative_to(root)), stripped, problems)
 
     duplicates = {name: where for name, where in declarations.items() if len(where) > 1}

@@ -45,9 +45,11 @@ enum ThumbnailLoadPolicy {
     ///
     /// - Returns: 本地表中受影响的条目数（便于门禁断言与日志）。
     @discardableResult
-    static func merge<T: Equatable>(_ into local: inout [String: T],
-                         resolved: [String: T],
-                         dropped: Set<String>) -> Int {
+    static func merge<T: Equatable>(
+        _ local: inout [String: T],
+        resolved: [String: T],
+        dropped: Set<String>
+    ) -> Int {
         var touched = 0
         for (key, value) in resolved where local[key] != value {
             local[key] = value

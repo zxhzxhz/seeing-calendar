@@ -189,7 +189,7 @@ func verifyPagingRoundTrip() async {
     let store = FakeStore()
     // 用户只在 9/30 画了日记。
     let drawn = "2026-09-30"
-    var covers: Set<String> = [drawn]
+    let covers: Set<String> = [drawn]
 
     // 三个常驻槽位：月视图里 [-1, 0, +1] 三个月各自一份网格实例。
     var back = GridInstance()      // -1 槽

@@ -25,6 +25,9 @@
   只有编辑保存 / 删除 / 导入恢复才推进。
 - `MonthGridView.==` 现在比较 `thumbnailVersion`（由 `MonthPager` 从 store 读出传入 ——
   等值判定是 `nonisolated` 的，不能直接碰 `@MainActor` 单例）。
+- `scripts/swift_lint.py` 新增规则：参数列表里的两个裸标识符（`(_ into local: ...`）——
+  这个形状会被 swiftc 报 `expected ':' following argument label and parameter name`，
+  本轮 CI 才暴露，现已本地拦住。
 
 ### 新增
 - `SeeingCalendar/Rendering/ThumbnailLoadPolicy.swift`：装载判定策略抽成纯逻辑
