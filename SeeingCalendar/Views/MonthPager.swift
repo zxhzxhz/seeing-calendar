@@ -56,6 +56,12 @@ struct MonthPager: View {
     let holidayNames: [String: String]
     /// O(1) 内容指纹：父视图算好，用来让 `EquatableView` 做廉价判定。
     let contentToken: Int
+    /// 缩略图内容代次（`ThumbnailStore.shared.version`）。
+    ///
+    /// 在这里而不是在 `MonthGridView` 内部读：等值判定 `==` 是 `nonisolated` 的，
+    /// 不能碰 `@MainActor` 的单例；而月历的缩略图状态存在子视图的 `@State` 里，
+    /// 父层必须显式把代次传下去，短路才不会被“看不见的状态”坑到。
+    let thumbnailVersion: Int
     let availableSize: CGSize
     let containerWidth: CGFloat
     let pulseKey: String?
@@ -97,6 +103,7 @@ struct MonthPager: View {
                              holidays: holidays,
                              holidayNames: holidayNames,
                              contentToken: contentToken,
+                             thumbnailVersion: thumbnailVersion,
                              availableSize: availableSize,
                              pulseKey: pulseKey,
                              pulseID: pulseID,

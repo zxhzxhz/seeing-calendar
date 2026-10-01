@@ -161,6 +161,7 @@ struct RootView: View {
                    holidays: holidayRegistry.statuses,
                    holidayNames: holidayRegistry.names,
                    contentToken: monthContentToken,
+                   thumbnailVersion: ThumbnailStore.shared.version,
                    availableSize: availableSize,
                    containerWidth: containerWidth,
                    pulseKey: pulseKey,

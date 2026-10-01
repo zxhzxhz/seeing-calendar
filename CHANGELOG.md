@@ -1,6 +1,39 @@
 # Changelog
 
-## [1.0.17] — 翻月性能重构 / 内置中国节假日 / 日格三态样式
+## [1.0.18] — 月历缩略图生命周期（翻回来丢图修复）
+
+### 修复
+- **在 10 月页能看到 9/30 的缩略图，10 → 11 → 10 往回翻就没了**
+  - 现象：月视图常驻三个月，10 月网格的首行是 9/27–9/30，所以从 9 月滑到 10 月时
+    能看见 9/30 的日记缩略图；但先滑到 11 月再滑回 10 月，该格变回空白。
+  - 根因一（D1 并发抢输）：两个月的网格会同时向 store 要同一页的缩略图，
+    而 `ThumbnailStore.regenerate` 见到同名文件正在生成就直接 `return`，
+    `thumbnail(for:)` 随后读到空缓存便返回 `nil` → 抢输那一格拿不到图。
+  - 根因二（D2 整表覆盖）：`loadThumbnails` 结尾是 `thumbnails = result`，
+    只要本次结果里某格缺失（并发抢输 / `coverPage` 关系读空），
+    **本来已经显示着的图会被一起抹掉**。
+  - 根因三（D3 短路锁死）：缩略图渲染结果存在子视图的 `@State` 里，父层看不见，
+    `ThumbnailStore.version` 又没有参与 `MonthGridView` 的等值判定 →
+    补齐所需的那次重算被 `EquatableView` 短路直接吃掉，格子一直停在空图上。
+
+### 优化
+- 同页缩略图生成改为 **Task 合并**：后来者 `await` 同一个在途 Task，人人有图，
+  同一文件也只合成一次（旧实现会为每一格各合成一次）。
+- 缩略图装载改为 **分批增量提交**（每 8 张一批）+ `ThumbnailLoadPolicy.merge`
+  **非破坏合并**：只写入新增/更新与明确失效的键，绝不整表覆盖。
+- 内容代次纪律：**装载补齐不再推进 `version`**（它不是内容变化，不该惊动 126 个日格），
+  只有编辑保存 / 删除 / 导入恢复才推进。
+- `MonthGridView.==` 现在比较 `thumbnailVersion`（由 `MonthPager` 从 store 读出传入 ——
+  等值判定是 `nonisolated` 的，不能直接碰 `@MainActor` 单例）。
+
+### 新增
+- `SeeingCalendar/Rendering/ThumbnailLoadPolicy.swift`：装载判定策略抽成纯逻辑
+  （无 SwiftUI / SwiftData / UIImage 依赖）。
+- `scripts/verify_thumbnail_lifecycle.swift` 门禁（CI 以 `--strict` 执行，23 条断言）：
+  并发合并、9 → 10 → 11 → 10 往回翻后 9/30 缩略图仍在、代次纪律、
+  删除页后陈旧条目被移除、整表覆盖的回归护栏、网格布局前提。
+
+ — 翻月性能重构 / 内置中国节假日 / 日格三态样式
 
 ### 新增
 - **内置中国大陆假期（两个 ICS 本地凭据，默认开启）**
