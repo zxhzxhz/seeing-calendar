@@ -209,9 +209,11 @@ func verifyPagingRoundTrip() async {
     await back.load(month: 10, store: store, covers: covers)
     check(back.thumbnails[drawn] != nil, "11 月时的 10 月页应显示 9/30 缩略图")
 
-    // 滑回 10 月：中心槽当前显示的是 11 月（其网格首行 10/25…，不含 9/30）。
+    // 滑回 10 月：中心槽当前显示的是 11 月（其网格 11/01…12/12，不含 9/30）。
     await center.load(month: 11, store: store, covers: covers)
-    check(center.thumbnails[drawn] == nil, "11 月网格不含 9/30，中心槽此时没有它的图")
+    // 非破坏策略下，9/30 的图**允许**留在本地表里（当前月份的格子只看得到自己那把 key，
+    // 留着无害）；旧实现在这里会把它抹掉，那正是丢图的起点。
+    check(center.thumbnails[drawn] != nil, "切到 11 月时不得抹掉已有的 9/30 缩略图")
 
     // 再回到 10 月 —— 这正是用户报的丢图现场。
     await center.load(month: 10, store: store, covers: covers)
@@ -270,7 +272,8 @@ func verifyGridLayoutPremise() {
     checkEqual(october.first, Optional("2026-09-27"), "2026-10 网格首格应为 09-27（周日起）")
     check(october.contains("2026-09-30"), "2026-10 网格必须含 09-30（前置格）")
     let november = gridKeys(forMonth: 11)
-    checkEqual(november.first, Optional("2026-10-25"), "2026-11 网格首格应为 10-25")
+    // 2026-11-01 就是周日 → 该月网格从 11/01 自身开始（不是 10/25）。
+    checkEqual(november.first, Optional("2026-11-01"), "2026-11 网格首格应为 11-01（当日即周日）")
     check(!november.contains("2026-09-30"), "2026-11 网格不含 09-30")
     let september = gridKeys(forMonth: 9)
     check(september.contains("2026-09-30"), "2026-09 网格必须含 09-30")

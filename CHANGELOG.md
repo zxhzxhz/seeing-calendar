@@ -29,7 +29,7 @@
 ### 新增
 - `SeeingCalendar/Rendering/ThumbnailLoadPolicy.swift`：装载判定策略抽成纯逻辑
   （无 SwiftUI / SwiftData / UIImage 依赖）。
-- `scripts/verify_thumbnail_lifecycle.swift` 门禁（CI 以 `--strict` 执行，23 条断言）：
+- `scripts/verify_thumbnail_lifecycle.swift` 门禁（CI 以 `--strict` 执行，28 条断言）：
   并发合并、9 → 10 → 11 → 10 往回翻后 9/30 缩略图仍在、代次纪律、
   删除页后陈旧条目被移除、整表覆盖的回归护栏、网格布局前提。
 
