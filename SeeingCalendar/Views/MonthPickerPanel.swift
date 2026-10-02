@@ -21,7 +21,22 @@ struct MonthPickerPanel: View {
     /// 这样「翻到明年看一眼再关掉」不会把月历也带着跑。
     @State private var browsingYear: Int
 
+    /// 最近一次切年的方向（+1 = 下一年，-1 = 上一年），只用来决定滑动动画从哪边进来。
+    @State private var slideDirection: Int = 0
+
+    // MARK: - 尺寸与阈值
+
     private static let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
+    private static let panelWidth: CGFloat = 296
+    private static let panelCornerRadius: CGFloat = 22
+
+    /// 手势「什么时候算开始拖动」。取一个明显大于点击抖动、又远小于一次真实滑动的值：
+    /// 12pt 以内一律当点击交给月份格，免得用户点月份时被误判成滑动。
+    private static let swipeRecognitionDistance: CGFloat = 12
+
+    /// 手势「什么时候算切年」。必须明显大于识别距离，否则轻微横向抖动就会跳年；
+    /// 又必须小于一个月份格的宽度（约 87pt），否则拇指够不到的短滑就失效了。
+    private static let swipeCommitDistance: CGFloat = 44
 
     init(month: Date, onPick: @escaping (Date) -> Void) {
         self.month = month
@@ -33,21 +48,18 @@ struct MonthPickerPanel: View {
         VStack(spacing: 0) {
             yearHeader
             Divider().opacity(0.5)
-            LazyVGrid(columns: Self.columns, spacing: 4) {
-                ForEach(1...12, id: \.self) { value in
-                    monthCell(value)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            monthGridArea
         }
-        .frame(width: 296)
+        .frame(width: Self.panelWidth)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
+        // 滑动切年时新旧两份网格会同时存在并横向平移；裁一刀把动画关在面板内，
+        // 否则平移中的月份格会溢出到面板外面。
+        .clipShape(RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.16), radius: 22, y: 10)
@@ -59,7 +71,11 @@ struct MonthPickerPanel: View {
         HStack(spacing: 0) {
             yearStepButton(delta: -1, label: "上一年")
             Spacer(minLength: 0)
-            Text("\(browsingYear)年")
+            // 用 `Text(verbatim:)` 而不是 `Text("\(browsingYear)年")`：
+            // 后者是**带插值的字符串字面量**，会被当成 `LocalizedStringKey`，
+            // 其中的 Int 走本地化数字格式化，于是年份被加上千位分隔符，渲染成「2,026年」。
+            // 年份不是需要按语言分组的数字量，走 String 插值（verbatim）才是对的。
+            Text(verbatim: "\(browsingYear)年")
                 .font(.system(size: 18, weight: .bold, design: .rounded))
                 .monospacedDigit()
             Spacer(minLength: 0)
@@ -72,13 +88,15 @@ struct MonthPickerPanel: View {
     /// 翻年按钮。
     ///
     /// 双箭头是用**两枚同向 chevron 叠出来**的，而不是用 SF Symbols 里那种
-    /// 「chevron 后面带序号」的编号字形：那类字形在不同 SF Symbols 版本里不一定存在，
-    /// 缺字形时 SwiftUI 会静默渲染空白，界面上就会出现两个点不动的隐形按钮。
-    /// （门禁会盯着这行注释别把那个字形名字再写回来，见 verify_ui_regressions.swift）
+    /// 「chevron 后面带序号」的编号字形（`chevron.left.2` / `chevron.right.2`）：
+    /// 那类字形在不同 SF Symbols 版本里不一定存在，缺字形时 SwiftUI 会静默渲染空白，
+    /// 界面上就会出现两个点不动的隐形按钮。
+    /// （这行注释里写了那两个被禁的字形名也不要紧 —— 门禁比对源码前会先剥掉行注释，
+    ///   见 verify_ui_regressions.swift 的 `code(of:)`。）
     private func yearStepButton(delta: Int, label: String) -> some View {
         let chevron = delta < 0 ? "chevron.left" : "chevron.right"
         return Button {
-            withAnimation(.easeInOut(duration: 0.16)) { browsingYear += delta }
+            stepYear(delta)
         } label: {
             HStack(spacing: -3) {
                 Image(systemName: chevron)
@@ -93,6 +111,76 @@ struct MonthPickerPanel: View {
         .accessibilityLabel(label)
     }
 
+    // MARK: - 月份网格（兼滑动切年落点）
+
+    /// 下部月份区域：既是 3 列 × 4 行网格，也是左右滑动手势的落点。
+    ///
+    /// 手势**只挂在这里**、不挂整个面板（用户明确要求只在月份区域响应）：
+    /// 上半部是年份行，那里已经有翻年箭头，再叠一层滑动手势只会和用户的意图打架。
+    private var monthGridArea: some View {
+        ZStack {
+            LazyVGrid(columns: Self.columns, spacing: 4) {
+                ForEach(1...12, id: \.self) { value in
+                    monthCell(value)
+                }
+            }
+            // 换年时给网格换一个身份，才有「翻过去」的插入 / 移除动画。
+            .id(browsingYear)
+            .transition(slideTransition)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .gesture(yearSwipeGesture)
+    }
+
+    /// 切年动画：往哪边翻，新网格就从哪边进来。
+    ///
+    /// **离场那半刻意不带方向**，只做淡出。原因是离场动画的方向捕获自**上一帧**的状态
+    /// （旧的网格是在上一次 body 求值时建好的，那时还不知道接下来往哪边翻），
+    /// 一旦方向相同就会新旧两张卡片朝同一边走，反向滑动时更明显。
+    /// 进场那半的方向则来自本次求值，是确定的 —— 所以把方向只押在进场侧。
+    ///
+    /// 承载它的必须是 `ZStack` 而不是 `VStack`：新旧两份网格会在动画期间同时存在，
+    /// 在 ZStack 里它们重叠、容器尺寸不变；放在 VStack 里面板高度会先翻倍再回落。
+    private var slideTransition: AnyTransition {
+        let forward = slideDirection >= 0
+        return .asymmetric(
+            insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
+            removal: .opacity
+        )
+    }
+
+    /// 下部月份区域上的左右滑动切年。
+    private var yearSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: Self.swipeRecognitionDistance)
+            .onEnded { value in
+                let delta = Self.yearStep(forSwipeX: value.translation.width,
+                                          y: value.translation.height)
+                guard delta != 0 else { return }
+                stepYear(delta)
+            }
+    }
+
+    /// 一次拖拽应当切换几年（0 = 不算滑动切年）。
+    ///
+    /// 判定顺序是有讲究的：**先看主方向，再看距离**。
+    /// 斜着拖（横向分量够长、但竖向更长）说明用户想竖着动，不能因为横向恰好超线就跳年。
+    ///
+    /// 返回值恒为 ±1，不按滑动距离放大 —— 面板宽度只够铺下 3 列月份，
+    /// 一次快手滑就飞出去好几年的话，用户还得再滑回来，反而是负担。
+    static func yearStep(forSwipeX dx: CGFloat, y dy: CGFloat) -> Int {
+        guard abs(dx) > abs(dy) else { return 0 }               // 主方向必须是横向
+        guard abs(dx) >= swipeCommitDistance else { return 0 }  // 距离必须够，免得点击 / 抖动误触发
+        return dx < 0 ? 1 : -1                                  // 往左滑 = 下一年（与右侧翻年箭头同向）
+    }
+
+    /// 切年的唯一入口：箭头与滑动手势都走这里，两条路径的动画与方向语义因此不会分叉。
+    private func stepYear(_ delta: Int) {
+        slideDirection = delta
+        withAnimation(.easeInOut(duration: 0.20)) { browsingYear += delta }
+    }
+
     // MARK: - 月份格
 
     private func monthCell(_ value: Int) -> some View {
@@ -101,7 +189,9 @@ struct MonthPickerPanel: View {
         return Button {
             onPick(CalendarUtils.startOfMonth(year: browsingYear, month: value))
         } label: {
-            Text("\(value)月")
+            // 同 `yearHeader`：`Text("\(value)月")` 会走 LocalizedStringKey 的数字格式化，
+            // 虽然 1…12 撞不上千位分隔符，但没有理由让两处标签走两套渲染路径。
+            Text(verbatim: "\(value)月")
                 .font(.system(size: 16, weight: isCurrent ? .bold : .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(isCurrent ? Color.white : Color.primary)
@@ -114,7 +204,8 @@ struct MonthPickerPanel: View {
                 .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(browsingYear)年\(value)月")
+        // 无障碍朗读同样不能走本地化数字格式化，否则会念成「2,026 年 1 月」。
+        .accessibilityLabel(Text(verbatim: "\(browsingYear)年\(value)月"))
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 }

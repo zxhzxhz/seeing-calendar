@@ -279,20 +279,17 @@ struct RootView: View {
 
                 // 年月标题即月份选择器的入口（Drop Menu）：点一下弹出 3×4 月份面板。
                 // 两侧的单箭头仍然是「前后各一月」的翻月按钮，两者不冲突。
+                //
+                // 标题旁边**不放**下拉小箭头：标题本身就是那唯一的东西，再挂一枚箭头
+                // 只是陈述「这里能点」，而箭头又会随展开状态翻转，视觉噪音大于信息量。
                 Button {
                     showMonthPicker.toggle()
                 } label: {
-                    HStack(spacing: 5) {
-                        Text(CalendarUtils.title(forMonth: month))
-                            .font(.system(size: 19, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(showMonthPicker ? 180 : 0))
-                    }
-                    .frame(minWidth: 118, alignment: .center)
-                    .contentShape(Rectangle())
+                    Text(CalendarUtils.title(forMonth: month))
+                        .font(.system(size: 19, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .frame(minWidth: 118, alignment: .center)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("选择月份")
