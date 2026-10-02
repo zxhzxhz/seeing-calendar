@@ -40,7 +40,38 @@ final class TrackingCanvasView: PKCanvasView {
         }
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        stripSystemEditMenuInteractions()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        stripSystemEditMenuInteractions()
+    }
+
+    /// 移除 PencilKit 为画布安装的系统编辑菜单交互。
+    ///
+    /// 成因：PencilKit 会在画布内部视图上挂 `UIEditMenuInteraction`，
+    /// 于是「在画布空白处点一下」有时会弹出系统的 **Select All / Insert Space** 菜单
+    /// —— 它既与本应用自带的选区菜单重复，内容也完全无关（本应用无任何文本编辑能力）。
+    /// 该交互由 PencilKit 懒加载安装，故在进入窗口 / 每次布局 / 每次落笔前都复查一遍。
+    private func stripSystemEditMenuInteractions() {
+        stripSystemEditMenuInteractions(in: self)
+    }
+
+    private func stripSystemEditMenuInteractions(in view: UIView) {
+        for interaction in view.interactions where interaction is UIEditMenuInteraction {
+            view.removeInteraction(interaction)
+        }
+        for subview in view.subviews {
+            stripSystemEditMenuInteractions(in: subview)
+        }
+    }
+
     @objc private func handleTracker(_ gesture: UILongPressGestureRecognizer) {
+        // 落笔第一瞬间清掉系统编辑菜单交互，确保抬手时不会再冒出无关菜单。
+        if gesture.state == .began { stripSystemEditMenuInteractions() }
         switch gesture.state {
         case .began, .changed:
             onTouch?(gesture.location(in: self), activeTouchType)

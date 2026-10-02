@@ -72,9 +72,15 @@ enum CanvasTool: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class EditorModel {
+    /// 墨色出厂默认值（三支笔相同；用户改过之后各自独立记住）。
+    nonisolated static let defaultPenColor = "#1F6FB2"
+
     let day: DayRecord
     let workspace: Workspace
     let repository: PageRepository
+
+    /// 工具栏偏好（墨色 / 笔宽 / 橡皮模式 / 橡皮大小）的持久化归宿。
+    private let settings = ToolSettingsStore()
 
     private(set) var pages: [DrawingPage] = []
     private(set) var pageIndex: Int = 0
@@ -106,7 +112,12 @@ final class EditorModel {
     /// 变更请走 `select(tool:)` / `updatePenColor(_:)` 等显式方法（它们会立即下发），
     /// 或依赖 `syncUIKitState` 的幂等签名比较兜底。
     var activeTool: CanvasTool? = .pen
-    var penColorHex: String = "#1F6FB2"
+    /// **当前这支笔**的墨色（界面取色圆点、画布笔色都取它）。
+    /// 每支笔在 `ToolSettingsStore` 里有自己的槽位，切笔时由 `adoptPenColor(for:)` 换上来。
+    var penColorHex: String = EditorModel.defaultPenColor
+    /// 墨色当前归属哪支笔：橡皮与导航态都不改变它 ——
+    /// 这样"橡皮 → 取色"仍然改的是上一支笔，语义上更符合直觉。
+    private(set) var currentInkTool: CanvasTool = .pen
     var penWidth: CGFloat = 5
     var eraserMode: EraserMode = .wholeStroke
     /// 橡皮有效范围直径（画布世界坐标）；同时决定 PKEraserTool.width 与指示圈直径。
@@ -127,6 +138,27 @@ final class EditorModel {
         self.note = day.note
         self.pages = day.orderedPages
         self.fingerDrawingAtLaunch = false
+        restoreToolSettings()
+    }
+
+    /// 从 `ToolSettingsStore` 恢复上次的工具栏偏好。
+    ///
+    /// 放在 `init` 而不是 `attach(host:)`：恢复只改模型状态，
+    /// 真正的工具下发由 `attach` 里的 `appliedToolSignature = ""` 强制完成一次。
+    private func restoreToolSettings() {
+        currentInkTool = .pen
+        penColorHex = settings.penColor(for: currentInkTool) ?? penColorHex
+        if let width = settings.penWidth { penWidth = CGFloat(width) }
+        if let mode = settings.eraserMode { eraserMode = mode }
+        if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
+    }
+
+    /// 换上台面指定笔自己的墨色（每支笔独立记忆）。
+    private func adoptPenColor(for tool: CanvasTool) {
+        guard tool != .eraser else { return }
+        currentInkTool = tool
+        let hex = settings.penColor(for: tool) ?? Self.defaultPenColor
+        if penColorHex != hex { penColorHex = hex }
     }
 
     var currentPage: DrawingPage? {
@@ -436,35 +468,43 @@ final class EditorModel {
     }
 
     /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
+    /// 同时把目标笔的专属墨色换上台面。
     func select(tool: CanvasTool) {
         if isLassoActive {
             isLassoActive = false
         }
-        activeTool = (activeTool == tool) ? nil : tool
+        // 是否"取消选中"看当前工具，换墨色看目标工具 —— 两者语义不同，别混用。
+        let next: CanvasTool? = (activeTool == tool) ? nil : tool
+        adoptPenColor(for: tool)
+        activeTool = next
         applyToolImmediately()
     }
 
-    /// 墨色
+    /// 墨色 —— 存入**当前这支笔**的槽位（每支笔独立记忆）。
     func updatePenColor(_ hex: String) {
         penColorHex = hex
+        settings.setPenColor(hex, for: currentInkTool)
         applyToolImmediately()
     }
 
     /// 笔宽
     func updatePenWidth(_ width: CGFloat) {
         penWidth = width
+        settings.penWidth = Double(width)
         applyToolImmediately()
     }
 
     /// 橡皮模式（整体擦除 / 范围擦除）
     func updateEraserMode(_ mode: EraserMode) {
         eraserMode = mode
+        settings.eraserMode = mode
         applyToolImmediately()
     }
 
     /// 橡皮有效范围
     func updateEraserWidth(_ width: CGFloat) {
         eraserWidth = width
+        settings.eraserWidth = Double(width)
         applyToolImmediately()
     }
 

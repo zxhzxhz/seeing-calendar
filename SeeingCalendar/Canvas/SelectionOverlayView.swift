@@ -14,7 +14,7 @@ protocol SelectionOverlayDelegate: AnyObject {
                           state: UIGestureRecognizer.State)
 }
 
-/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **iOS 原生编辑菜单** / 自定义套索捕获 / 内部拖动。
+/// 顶层统一选区交互层：虚线框 / 8 向手柄 / 旋转锚点 / **自绘浮动编辑菜单** / 自定义套索捕获 / 内部拖动。
 ///
 /// 手势路由（v1.0.5 修正，三处真机问题都出在这一层）：
 /// 1. 手柄与内部拖动区是**两个不同的视图**，手柄在其之上 —— 触摸手柄不会被内部拖动"覆盖"；
@@ -75,11 +75,18 @@ final class SelectionOverlayView: UIView {
     private var handleViews: [SelectionHandleView] = []
     private var lassoPoints: [CGPoint] = []
     private var isCapturingLasso = false
-    private lazy var editMenu = UIEditMenuInteraction(delegate: self)
+    /// 自绘浮动菜单（替代系统编辑菜单，见 `SelectionMenuView` 顶部注释）。
+    private var menuView: SelectionMenuView?
     private var menuActions: [SelectionAction] = []
-    private var lastPresentedTag: Int = -1
-    /// 呈现代次：同一帧内多次触发时只允许最后一次真正弹出，避免重复弹菜单。
-    private var menuGeneration: Int = 0
+
+    /// 菜单与选区之间的**净间距**（屏幕 pt）。产品要求：不得压住控制点。
+    /// 下方只需让开边缘/角落手柄（高 10~16pt，向下不超出选区外）。
+    static let menuGap: CGFloat = 32
+    /// 上方还要额外让开**旋转锚点** —— 它悬在选区上缘外 34pt（基准偏移）、自身高 28pt，
+    /// 实际伸到 48pt；故上方的间距必须比下方大，否则菜单会压在旋转控制点上。
+    static let menuGapAbove: CGFloat = 52
+    /// 上下都放不下时，菜单落在选区**内部**、距上边缘的距离（屏幕 pt）。
+    static let menuInnerInset: CGFloat = 10
 
     /// 内部拖动区：独立子视图，保证它的手势不会"盖住"其上的手柄。
     private let interiorView = SelectionInteriorView()
@@ -108,8 +115,6 @@ final class SelectionOverlayView: UIView {
 
         addSubview(interiorView)
         interiorView.addGestureRecognizer(interiorPan)
-
-        addInteraction(editMenu)
     }
 
     required init?(coder: NSCoder) {
@@ -183,30 +188,32 @@ final class SelectionOverlayView: UIView {
         return false
     }
 
-    /// 用户主动唤出菜单（点按选区内部时调用）。
-    /// 与「进入形态时自动弹」分离：变形/裁剪态进入不自动弹，但这里一定会弹。
+    /// 用户主动唤出菜单（点按选区内部/贴图时调用）。
+    /// **立即呈现**：自绘菜单不需要等系统菜单退场动画，因此没有任何延时。
     func presentMenu() {
-        guard !menuActions.isEmpty, let anchor = menuAnchorPoint() else { return }
-        lastPresentedTag = mode.shapeTag
-        menuGeneration &+= 1
-        let generation = menuGeneration
-        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: anchor)
-        editMenu.dismissMenu()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(120))
-            guard let self, self.menuGeneration == generation else { return }
-            self.editMenu.presentEditMenu(with: configuration)
-        }
+        presentMenuNow()
     }
 
     // MARK: - 外部查询与控制
 
     /// 主动收起菜单。
-    func dismissMenu() {
-        guard lastPresentedTag != -1 else { return }
-        lastPresentedTag = -1
-        menuGeneration &+= 1
-        editMenu.dismissMenu()
+    ///
+    /// 只淡出并隐藏，**不销毁视图** —— 视图留着，下一次弹出就能复用同一批按钮
+    /// （`SelectionMenuView.configure` 在动作集不变时不重建），
+    /// 于是"再点一下图片"是真正的零布局开销，不会闪一下。
+    func dismissMenu(animated: Bool = true) {
+        guard let menu = menuView, !menu.isHidden else { return }
+        if animated {
+            UIView.animate(withDuration: 0.12) {
+                menu.alpha = 0
+            } completion: { _ in
+                // 若期间又被重新弹出（alpha 被改回 1），不隐藏。
+                if menu.alpha < 0.01 { menu.isHidden = true }
+            }
+        } else {
+            menu.alpha = 0
+            menu.isHidden = true
+        }
     }
 
     // MARK: - 状态更新
@@ -233,7 +240,12 @@ final class SelectionOverlayView: UIView {
             }
         }
         refreshLayout()
-        syncEditMenu(force: true)
+        // 形态切换时立即重建并呈现：自绘菜单无需等待系统菜单退场，真正做到"即时弹出"。
+        if autoPresentsMenu, !menuActions.isEmpty {
+            presentMenuNow()
+        } else {
+            dismissMenu()
+        }
     }
 
     /// 仅几何变化（拖拽过程中）：不重建手柄，只重排 —— 否则进行中的手势会被立刻打断。
@@ -275,7 +287,8 @@ final class SelectionOverlayView: UIView {
         interiorView.isActive = isInteriorDraggable
         interiorView.region = compositeRect ?? .null
 
-        syncEditMenu(force: false)
+        // 几何变化（拖拽/缩放中）只让菜单跟随重排，不重建、不重弹。
+        repositionMenu()
     }
 
     /// 基准点：单选/复合变形都以包围盒中心为不动点，这里把它画出来（圆 + 十字）。
@@ -344,47 +357,122 @@ final class SelectionOverlayView: UIView {
         }
     }
 
-    // MARK: - iOS 原生菜单
+    // MARK: - 浮动菜单（自绘，取代系统编辑菜单）
 
-    private func syncEditMenu(force: Bool) {
-        guard !menuActions.isEmpty, autoPresentsMenu, let anchor = menuAnchorPoint() else {
-            dismissMenu()
-            return
-        }
-        let tag = mode.shapeTag
-        guard force || lastPresentedTag != tag else { return }
-        lastPresentedTag = tag
-        menuGeneration &+= 1
-        let generation = menuGeneration
-        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: anchor)
-
-        // 形态切换（例如“裁剪”进入二级状态）时旧菜单仍在退场动画中，
-        // 立即重新呈现会被系统忽略，因此先收起、再等一拍由**最新一次**调度弹出。
-        editMenu.dismissMenu()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(force ? 160 : 60))
-            guard let self, self.menuGeneration == generation, self.lastPresentedTag == tag else { return }
-            self.editMenu.presentEditMenu(with: configuration)
-        }
-    }
-
-    /// 菜单锚点放在选区**下方**，避免遮挡顶部的旋转控制手柄。
-    private func menuAnchorPoint() -> CGPoint? {
-        let scale = max(0.05, contentScale)
-        // 间距 = 手柄命中半径(22) + 菜单半高(≈25) + 余量 → 确保菜单完全不压手柄。
-        let gap = 60 * scale
+    /// 当前选区的世界坐标包围盒。
+    private func selectionBounds() -> CGRect? {
+        let box: CGRect
         switch mode {
         case .none:
             return nil
         case .composite(let rect), .compositeTransform(let rect):
-            return CGPoint(x: rect.midX, y: rect.maxY + gap)
+            box = rect
         case .image(let quad), .cropping(let quad):
-            guard let lowest = quad.max(by: { $0.y < $1.y }) else { return nil }
-            // 关键：用**下边中点**而不是最下方那个角点 —— 角点即右下角，
-            // 系统以锚点为中心弹出菜单，菜单会直接盖住右下角缩放手柄与底部中点裁剪手柄。
-            let bottomCenterX = quad.map(\.x).reduce(0, +) / CGFloat(quad.count)
-            return CGPoint(x: bottomCenterX, y: lowest.y + gap)
+            box = CanvasGeometry.boundingBox(quad)
         }
+        return box.isNull ? nil : box
+    }
+
+    /// 覆盖层坐标下的「可见画布区域」。
+    /// 菜单的上下空间判定必须基于**视口**而不是 1400×1400 的整张画布。
+    private func visibleViewport() -> CGRect? {
+        guard let container = superview,
+              let scroll = container.superview as? UIScrollView else { return nil }
+        return scroll.convert(scroll.bounds, to: self)
+    }
+
+    /// 立即呈现菜单（无任何延时）。
+    private func presentMenuNow() {
+        guard !menuActions.isEmpty, let selection = selectionBounds() else {
+            dismissMenu()
+            return
+        }
+
+        let menu: SelectionMenuView
+        if let existing = menuView {
+            menu = existing
+        } else {
+            let created = SelectionMenuView()
+            created.onSelect = { [weak self] action in
+                guard let self else { return }
+                // 先收菜单再执行动作：否则动作里重建的选区会与旧菜单同屏共存。
+                self.dismissMenu(animated: false)
+                self.delegate?.selectionOverlay(self, didSelect: action)
+            }
+            menuView = created
+            menu = created
+        }
+        if menu.superview !== self {
+            addSubview(menu)
+        } else {
+            bringSubviewToFront(menu)   // 手柄可能在本轮被重建到菜单之上
+        }
+        menu.isHidden = false
+
+        menu.configure(actions: menuActions, singleImage: mode.isSingleImage)
+        placeMenu(menu, selection: selection)
+
+        if menu.alpha < 0.01 {
+            // 首次出现：极短的入场动画，视觉上等同即时弹出。
+            menu.alpha = 0
+            UIView.animate(withDuration: 0.09) { menu.alpha = 1 }
+        } else {
+            menu.alpha = 1
+        }
+    }
+
+    /// 几何变化时让菜单跟随选区重排。
+    private func repositionMenu() {
+        guard let menu = menuView, !menu.isHidden else { return }
+        guard !menuActions.isEmpty, let selection = selectionBounds() else {
+            dismissMenu()
+            return
+        }
+        placeMenu(menu, selection: selection)
+    }
+
+    private func placeMenu(_ menu: SelectionMenuView, selection: CGRect) {
+        let viewport = visibleViewport() ?? bounds
+        let size = SelectionMenuView.designedSize(actionCount: menuActions.count)
+        let scale = max(0.05, contentScale)
+        menu.transform = .identity
+        menu.bounds = CGRect(origin: .zero, size: size)
+        menu.center = menuCenter(for: selection, viewport: viewport, size: size, scale: scale)
+        menu.transform = CGAffineTransform(scaleX: scale, y: scale)
+    }
+
+    /// 菜单中心点（覆盖层坐标）。落点规则满足产品要求：
+    /// 1. 优先在选区**下方**，与选区保持 `menuGap` 的净间距（不压任何控制手柄）；
+    /// 2. 下方放不下（选区贴近视口底部）→ 改放**上方**；
+    /// 3. 上方也放不下（贴图很大、上下都没空间）→ 落在选区**内部靠近顶部**处。
+    ///
+    /// 横向以选区中心对齐，并夹紧在视口内保证完整可见。
+    /// 关键：所有阈值都先在**世界坐标**里算、且视口取的是"画布在屏幕上的可见区域"，
+    /// 而不是 1400×1400 的整张画布 —— 否则缩小视图时贴图永远"下方有空间"。
+    private func menuCenter(for selection: CGRect, viewport: CGRect, size: CGSize, scale: CGFloat) -> CGPoint {
+        let worldWidth = size.width * scale
+        let worldHeight = size.height * scale
+        let halfWidth = worldWidth / 2
+        let halfHeight = worldHeight / 2
+        let gapBelow = Self.menuGap * scale
+        let gapAbove = Self.menuGapAbove * scale
+        let edge = 4 * scale
+
+        var centerX = selection.midX
+        if viewport.width > worldWidth {
+            centerX = min(max(centerX, viewport.minX + halfWidth + edge),
+                          viewport.maxX - halfWidth - edge)
+        } else {
+            centerX = viewport.midX
+        }
+
+        if viewport.maxY - selection.maxY >= worldHeight + gapBelow {
+            return CGPoint(x: centerX, y: selection.maxY + gapBelow + halfHeight)
+        }
+        if selection.minY - viewport.minY >= worldHeight + gapAbove {
+            return CGPoint(x: centerX, y: selection.minY - gapAbove - halfHeight)
+        }
+        return CGPoint(x: centerX, y: selection.minY + Self.menuInnerInset * scale + halfHeight)
     }
 
     // MARK: - 布局计算
@@ -550,37 +638,6 @@ final class SelectionOverlayView: UIView {
     private func updateLassoLayer() {
         lassoLayer.lineWidth = 1.5 * max(0.05, contentScale)
         lassoLayer.path = CanvasGeometry.path(points: lassoPoints)
-    }
-}
-
-// MARK: - 原生菜单数据源
-
-extension SelectionOverlayView: UIEditMenuInteractionDelegate {
-    nonisolated func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                                         menuFor configuration: UIEditMenuConfiguration,
-                                         suggestedActions: [UIMenuElement]) -> UIMenu? {
-        // UIKit 保证在主线程回调，这里显式声明隔离域以满足 Swift 6 严格并发。
-        MainActor.assumeIsolated {
-            guard !menuActions.isEmpty else { return nil }
-            let single = mode.isSingleImage
-            let children = menuActions.map { action -> UIAction in
-                UIAction(title: action.title(singleImage: single),
-                         image: UIImage(systemName: action.symbol)) { [weak self] _ in
-                    guard let self else { return }
-                    self.delegate?.selectionOverlay(self, didSelect: action)
-                }
-            }
-            return UIMenu(title: "", children: children)
-        }
-    }
-
-    nonisolated func editMenuInteraction(_ interaction: UIEditMenuInteraction,
-                                         targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
-        MainActor.assumeIsolated {
-            guard let anchor = menuAnchorPoint() else { return .zero }
-            let size = 14 * max(0.05, contentScale)
-            return CGRect(x: anchor.x - size / 2, y: anchor.y - size / 2, width: size, height: size)
-        }
     }
 }
 

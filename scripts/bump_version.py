@@ -48,6 +48,10 @@ def insert_changelog(version: tuple[int, int, int]) -> None:
         text = text.replace(marker, f"{marker}\n\n{block}", 1)
     elif placeholder in text:
         text = text.replace(placeholder, f"{heading}\n\n{placeholder}", 1)
+    elif re.match(r"^# Changelog\s*\n", text):
+        # 已有 H1 时就插在它下面；不要再拼一个 "# Changelog"
+        # —— 旧实现无条件前置，跑一次就多一个一级标题（历史上攒了 15 个）。
+        text = re.sub(r"^# Changelog\s*\n\n*", f"# Changelog\n\n{block}", text, count=1)
     else:
         text = f"# Changelog\n\n{block}" + text
     CHANGELOG.write_text(text, encoding="utf-8")

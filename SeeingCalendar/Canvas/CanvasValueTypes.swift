@@ -98,6 +98,26 @@ extension SelectionAction {
         if self == .copy { return singleImage ? "拷贝" : "复制" }
         return title
     }
+
+    /// 浮动菜单上显示的短标签：菜单是一行紧凑图标按钮，标题必须控制在 2 个字以内。
+    /// 完整语义（如「置顶（笔迹之上）」）通过按钮的 `accessibilityLabel` 保留。
+    func shortTitle(singleImage: Bool) -> String {
+        switch self {
+        case .copy: return singleImage ? "拷贝" : "复制"
+        case .cut: return "剪切"
+        case .delete: return "删除"
+        case .transform: return "变形"
+        case .finishTransform: return "完成"
+        case .crop: return "裁剪"
+        case .finishCrop: return "完成"
+        case .cancelCrop: return "取消"
+        case .replace: return "替换"
+        case .bringToFront: return "置顶"
+        case .sendToBack: return "置底"
+        case .lock: return "锁定"
+        case .unlock: return "解锁"
+        }
+    }
 }
 
 /// 手柄种类：单图（4 角等比 + 4 边裁剪 + 顶部旋转）/ 复合（8 向 + 旋转）。

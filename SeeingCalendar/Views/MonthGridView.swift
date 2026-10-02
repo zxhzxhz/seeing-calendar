@@ -108,14 +108,24 @@ struct MonthGridView: View, Equatable {
         }
     }
 
+    /// 缩略图装载的触发指纹。
+    ///
+    /// 为什么必须带 `contentToken`：启动首帧 `RootView.bootstrap()` 还没跑完，
+    /// `RootView.workspace` 为 nil → `records` 是个空字典。此时 `.task(id:)` 已经跑过一轮
+    /// （每一格都无从解析），而**只要 id 不变它就不会再启动** —— 随后 `@Query` 把记录送进来、
+    /// 父层指纹变了、view 也重算了，缩略图却永远停在"未加载"。
+    /// 把父层那个 O(1) 指纹并进 id，数据一到就重启；已经画好的格子会被
+    /// `ThumbnailLoadPolicy` 判成 `.keep`，重启本身是廉价的。
     private var token: ThumbToken {
         ThumbToken(month: CalendarUtils.key(for: CalendarUtils.startOfMonth(month)),
-                   version: thumbnailVersion)
+                   version: thumbnailVersion,
+                   contentToken: contentToken)
     }
 
     private struct ThumbToken: Hashable {
         let month: String
         let version: Int
+        let contentToken: Int
     }
 
     private var weekdayHeader: some View {
@@ -196,6 +206,10 @@ struct MonthGridView: View, Equatable {
     /// 就会被一起抹掉；而 `records` 是整个工作区的全量字典、`coverPage` 又是延迟加载关系，
     /// 「缺失」并不是异常状态。现在缺失只会让该格保持原样，其它格的更新照常落地。
     private func loadThumbnails() async {
+        // 空字典 = "记录还没送到"，不是"这一天没有封面"。
+        // 这里必须区分：启动首轮若把每一格都判成 `.drop`，刚恢复出来的格子会被挨个抹掉，
+        // 而且 `loadedVersion` 还会被写成一个从未真正验证过的代次。
+        let recordsLoaded = !records.isEmpty
         let versionChanged = loadedVersion != thumbnailVersion
         var resolved: [String: UIImage] = [:]
         var dropped: Set<String> = []
@@ -219,6 +233,8 @@ struct MonthGridView: View, Equatable {
             case .keep:
                 continue
             case .drop:
+                // 记录没到齐时不判定"消失"，留给下一次带 `contentToken` 的重启。
+                guard recordsLoaded else { continue }
                 dropped.insert(key)
             case .resolve:
                 guard let page else { continue }
@@ -230,6 +246,7 @@ struct MonthGridView: View, Equatable {
             if pending >= ThumbnailLoadPolicy.batchSize { flush() }
         }
         flush()
-        loadedVersion = thumbnailVersion
+        // 只有在记录已到齐时才能宣布"这一代已处理完"；否则下一次重启会误判代次未变。
+        if recordsLoaded { loadedVersion = thumbnailVersion }
     }
 }
