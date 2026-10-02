@@ -243,4 +243,16 @@ final class ICSSubscription {
     func applies(to workspaceUUID: UUID) -> Bool {
         self.workspaceUUID == nil || self.workspaceUUID == workspaceUUID
     }
+
+    /// 订阅源的展示顺序：用户自建在上、内置凭据恒定居底。
+    ///
+    /// 内置凭据是班休数据的唯一来源（删不掉、也换不掉），它属于「基础设施」而不是
+    /// 用户自建的同类项。按创建时间混排的话它总在最前，用户新建的订阅反被挤到下面；
+    /// 而且只要内置行跟着列表上下移动，用户滑动删除时就永远要重新确认「删的是哪一行」。
+    ///
+    /// 只在两段内部保持输入顺序（列表的 `@Query` 已按 `createdAt` 排序），
+    /// 不做二次排序 —— 顺序是用户看得懂的东西，不该在这里再被改写一次。
+    static func displayOrder(_ items: [ICSSubscription]) -> [ICSSubscription] {
+        items.filter { !$0.isBuiltIn } + items.filter(\.isBuiltIn)
+    }
 }

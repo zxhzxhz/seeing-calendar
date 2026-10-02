@@ -257,8 +257,14 @@ func verifyProductionSourceSync() {
 
 /// 镜像 `ThumbnailStore` 的关键决策：内存表 + 无内容标记 + 内容代次 + 在途合并。
 ///
-/// 与生产的差异只在「同步/异步」：这里单线程串行，`async let` 仅用于制造交错。
-final class FakeStore: @unchecked Sendable {
+/// `@MainActor` 与生产一致：生产 `ThumbnailStore` 本身就是 `@MainActor` 单例，
+/// 只有镜像了隔离属性才算真的镜像了它。这里从前是个 nonisolated 的 `final class`，
+/// 用 `@unchecked` 冒充 `Sendable`、注释里写「这里单线程串行」——而顶层代码在 Swift 5
+/// 模式下是 nonisolated 的，`async let` 子任务于是落到全局并发池：断言 6 的三个
+/// `async let` 同时读写同一个 Swift Dictionary，CI 上直接 `Segmentation fault: 11`。
+/// 隔离必须写在类型上，不能写在注释里。
+@MainActor
+final class FakeStore {
     private(set) var images: [String: String] = [:]        // 槽位键 → 图标识
     private(set) var emptySlots: Set<String> = []
     private(set) var version = 0
@@ -370,6 +376,7 @@ func verifyDispositionTable() {
 
 // MARK: - 断言 2：★ 用户报的 bug —— 清空页后缩略图必须立刻消失
 
+@MainActor
 func verifyClearPageRefreshesCover() async {
     let store = FakeStore()
     let slot = "cover|2026-10-08"
@@ -409,6 +416,7 @@ func verifyClearPageRefreshesCover() async {
 
 // MARK: - 断言 3：新建页（没有笔迹文件）不得误删封面
 
+@MainActor
 func verifyNewPageDoesNotWipeCover() async {
     let store = FakeStore()
     let coverSlot = "cover|2026-10-09"
@@ -430,7 +438,8 @@ func verifyNewPageDoesNotWipeCover() async {
 
 // MARK: - 断言 4：冷启动磁盘批量补齐只推进一次代次
 
-func verifyColdStartBulkPrime() {
+@MainActor
+func verifyColdStartBulkPrime() async {
     let store = FakeStore()
     // 上一轮退出时留下的 42 张 PNG。
     var entries: [(slot: String, name: String)] = []
@@ -451,6 +460,7 @@ func verifyColdStartBulkPrime() {
 
 // MARK: - 断言 5：已确认无内容的槽位不得反复重算（收敛性）
 
+@MainActor
 func verifyConfirmedEmptyConverges() async {
     let store = FakeStore()
     let slot = "cover|2026-10-10"
@@ -473,6 +483,7 @@ func verifyConfirmedEmptyConverges() async {
 
 // MARK: - 断言 6：同页并发请求必须合并，人人有图
 
+@MainActor
 func verifyConcurrentCoalescing() async {
     let store = FakeStore()
     let name = "page-2026-09-30.png"
@@ -490,6 +501,7 @@ func verifyConcurrentCoalescing() async {
 
 // MARK: - 断言 7：非破坏 —— 拿不到结论时已有图必须原样保留
 
+@MainActor
 func verifyNonDestructiveOnUnavailable() async {
     let store = FakeStore()
     let slot = "cover|2026-10-11"
@@ -521,6 +533,7 @@ func verifyNonDestructiveOnUnavailable() async {
 /// 跑一轮 `primeFromDisk`：内存里没图、标记也没了，磁盘上那张**陈旧** PNG
 /// 就被扶回缓存，用户看到清空的图又回来了。
 /// 修法：撤标记只能发生在 `.commit`（写缓存那一帧）。
+@MainActor
 func verifyNoStaleResurrectionDuringRegenerate() async {
     let store = FakeStore()
     let slot = "cover|2026-10-12"
@@ -571,18 +584,67 @@ func verifyGridLayoutPremise() {
     check(gridKeys(forMonth: 9).contains("2026-09-30"), "2026-09 网格必须含 09-30")
 }
 
+// MARK: - 断言 10：门禁自身的隔离前提（防数据竞争回潮）
+
+/// `FakeStore` 必须自带 `@MainActor`，否则门禁自己就是数据竞争源。
+///
+/// 曾经的样子：`FakeStore` 是 nonisolated 的 `final class`，注释里写着「这里单线程串行」，
+/// 而顶层代码在 Swift 5 模式下是 nonisolated 的 —— `async let` 子任务于是落到全局并发池，
+/// 断言 6 的三个 `async let` 同时读写同一个 Swift Dictionary，CI 上直接
+/// `Segmentation fault: 11`（exit 139）。重跑就绿，最容易被当成基础设施抖动放过去。
+///
+/// 比「随机红」更麻烦的是它的后果：**测量本身有竞争时，它的通过不说明被测逻辑是对的**。
+/// 所以隔离必须写在类型上，不能写在注释里；`async let` 只允许出现在自带隔离的函数里。
+///
+/// 针脚一律拆开拼接（本门禁比对的是 `normalizeWhitespace` 后的原文，**不剥注释**），
+/// 否则这个函数自己就成了命中项。
+func verifyStoreIsolation() {
+    guard let source = productionSource("scripts/verify_thumbnail_lifecycle.swift") else {
+        check(false, "读不到门禁脚本自身（门禁必须在仓库根运行）")
+        return
+    }
+    let flat = normalizeWhitespace(source)
+
+    check(flat.contains("@MainActor " + "final class FakeStore"),
+          "★ FakeStore 必须声明 @MainActor：它是可变状态的载体，隔离不能只写在注释里")
+    check(!flat.contains("@unchecked" + " Sendable"),
+          "★ 不得再用 @unchecked 给可变状态打口头担保冒充可并发 —— 那正是上次 SIGSEGV 的掩护")
+    check(!flat.contains("Task." + "detached"),
+          "★ 不得用脱开 main actor 的任务在隔离外碰状态：那等于把同一个竞争放回来")
+
+    // 扁平化之后没有行号可用，于是用「两个 `func verify…` 之间的片段」当函数体：
+    // 每个片段的头部是函数名，体是它到下一个验证函数声明之间的全部内容。
+    // 隔离注解写在 `func` **之前**，所以它在**上一个**片段的尾部。
+    let chunks = flat.components(separatedBy: "func verify")
+    var storeDriven = 0
+    for index in 1..<chunks.count {
+        let chunk = chunks[index]
+        guard let brace = chunk.firstIndex(of: "{") else { continue }
+        guard String(chunk[brace...]).contains("FakeStore" + "(") else { continue }
+        guard let paren = chunk.firstIndex(of: "(") else { continue }
+        let name = String(chunk[chunk.startIndex..<paren])
+        if name == "StoreIsolation" { continue }   // 这个函数自己就是针脚本体
+        storeDriven += 1
+        check(chunks[index - 1].hasSuffix("@MainActor "),
+              "★ verify\(name) 驱动了 FakeStore，声明上必须带 @MainActor —— 否则它的 async let 子任务跑出主 actor，并发读写同一个字典")
+    }
+    check(storeDriven >= 7,
+          "驱动 FakeStore 的验证函数应不少于 7 个，实际 \(storeDriven) 个：脚本结构变了，本护栏要跟着改")
+}
+
 // MARK: - 运行
 
 verifyProductionSourceSync()
 verifyDispositionTable()
 await verifyClearPageRefreshesCover()
 await verifyNewPageDoesNotWipeCover()
-verifyColdStartBulkPrime()
+await verifyColdStartBulkPrime()
 await verifyConfirmedEmptyConverges()
 await verifyConcurrentCoalescing()
 await verifyNonDestructiveOnUnavailable()
 verifyGridLayoutPremise()
 await verifyNoStaleResurrectionDuringRegenerate()
+verifyStoreIsolation()
 
 let strict = CommandLine.arguments.contains("--strict")
 if failures.isEmpty {

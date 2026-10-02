@@ -33,6 +33,22 @@ struct PageRepository {
         return workspace
     }
 
+    /// 只改维度的显示名。
+    ///
+    /// 维度的身份是 `uuid`：日程的 `workspaceUUID`、页面的归属、磁盘资产目录都挂在它上面，
+    /// 所以改名不会动画作与日程。`sortIndex` 也一律不动 —— 位置是用户自己排的，
+    /// 改个名字不该把它挪到列表最后。
+    ///
+    /// 空名与纯空白一律拒绝（返回 false）：列表上会出现一行看不出是什么、又点不进去的维度。
+    @discardableResult
+    func renameWorkspace(_ workspace: Workspace, to name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+        workspace.name = trimmed
+        try? context.save()
+        return true
+    }
+
     /// 删除维度并级联清理磁盘资产；返回值表示是否还有其它维度存活。
     func deleteWorkspace(_ workspace: Workspace) -> Bool {
         let orphanPages = workspace.days.flatMap { $0.pages }
