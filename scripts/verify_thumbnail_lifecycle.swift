@@ -263,6 +263,9 @@ final class FakeStore: @unchecked Sendable {
     private(set) var renders = 0                           // 实际执行的合成次数
     /// 磁盘（槽位键 → 文件名）→ PNG 是否存在。合成会写回这里，模拟落盘。
     private(set) var diskPNGs: Set<String> = []
+    /// 门禁专用：往假磁盘里放一张 PNG（模拟上一轮退出时留下的文件 / 删文件失败）。
+    /// `diskPNGs` 本身是 `private(set)`，断言不得直接改它。
+    func seedDiskPNG(_ slot: String) { diskPNGs.insert(slot) }
     /// 磁盘上有笔迹文件（`renderPNG` 能不能读到内容）。
     var drawingFiles: Set<String> = []
     /// 下一次合成的返回（用于制造 .empty / .unreadable 场景）。
@@ -432,7 +435,7 @@ func verifyColdStartBulkPrime() {
     for day in 1...42 {
         let key = String(format: "2026-10-%02d", day)
         entries.append((slot: "cover|\(key)", name: "page-\(key).png"))
-        store.diskPNGs.insert("cover|\(key)")
+        store.seedDiskPNG("cover|\(key)")
     }
     let misses = store.primeFromDisk(entries)
     check(misses.isEmpty, "磁盘都有图时不应产生待合成项")
@@ -531,7 +534,7 @@ func verifyNoStaleResurrectionDuringRegenerate() async {
     store.forget(slot)
     // 故意把陈旧 PNG 拨回磁盘：模拟 `forget` 那一步删文件失败（磁盘满 / 权限）。
     // 排查不能只依赖「文件已经删了」，标记必须自己顶得住。
-    store.diskPNGs.insert(slot)
+    store.seedDiskPNG(slot)
     async let regenerating: Void = store.regenerate(slot, name: name)
     try? await Task.sleep(nanoseconds: 1_500_000)          // 落在合成挂起窗口内
     _ = store.primeFromDisk([(slot: slot, name: name)])     // 月历恰在此刻重启
