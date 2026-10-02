@@ -111,32 +111,16 @@ final class ImageEntityView: UIImageView {
         applyWorldTransform()
     }
 
-    /// 锁定态的视觉角标（右上角小锁）。
-    private lazy var lockBadge: UIImageView = {
-        let view = UIImageView(image: UIImage(systemName: "lock.fill"))
-        view.tintColor = .secondaryLabel
-        view.contentMode = .scaleAspectFit
-        view.isHidden = true
-        addSubview(view)
-        return view
-    }()
-
+    /// 锁定态只改变交互语义（不可选中 / 不可拖动），**不再画任何角标**。
+    ///
+    /// 旧实现会在右上角叠一枚小锁 `UIImageView`。它对用户的骚扰大于信息量：
+    /// 贴图一旦锁定，那枚锁会一直压在画面上（也就是用户的画作上），
+    /// 而「哪些贴图锁了」这件事在菜单里本来就看得到：贴图菜单里有「锁定贴图」，
+    /// 编辑器菜单里有「解锁全部贴图（N）」（N 为 0 时置灰）。
     func setLocked(_ locked: Bool) {
         isLocked = locked
-        lockBadge.isHidden = !locked
+        // 锁定即退出选中态：高亮环留在锁定贴图上会让人以为它还是可操作的。
         if locked { setHighlighted(false) }
-        layoutLockBadge()
-    }
-
-    private func layoutLockBadge() {
-        guard !lockBadge.isHidden else { return }
-        let side = max(10, min(bounds.width, bounds.height) * 0.18)
-        lockBadge.frame = CGRect(x: bounds.width - side - 3, y: 3, width: side, height: side)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        layoutLockBadge()
     }
 
     /// 选中态临时高亮（不改变任何几何，纯视觉提示）。

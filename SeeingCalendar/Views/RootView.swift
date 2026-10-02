@@ -32,6 +32,8 @@ struct RootView: View {
     @State private var showSubscriptions = false
     @State private var showBackup = false
     @State private var showRestoreDialog = false
+    /// 顶栏年月处的月份选择下拉面板是否展开。
+    @State private var showMonthPicker = false
     @State private var toast: String?
 
     // 翻月手势状态（刻意不放在 RootView 的 @State 里，见 MonthPagerState 的注释）
@@ -71,10 +73,17 @@ struct RootView: View {
                 if isPortrait {
                     portraitLayout(width: proxy.size.width)
                 } else {
-                    landscapeLayout(width: proxy.size.width, height: proxy.size.height)
+                    landscapeLayout(width: proxy.size.width)
                 }
             }
             .background(Color(uiColor: .systemGroupedBackground))
+        }
+        // 月份选择下拉：先铺一层透明收口层（点面板以外任意处关闭），
+        // 再在它上面挂面板 —— 后挂的在上层，所以面板点得到。
+        .overlay { monthPickerDismissLayer }
+        .overlay(alignment: .topLeading) {
+            monthPickerLayer
+                .animation(.spring(response: 0.28, dampingFraction: 0.86), value: showMonthPicker)
         }
         .task { await bootstrap() }
         .onChange(of: subscriptions.map(\.urlString)) { _, _ in
@@ -144,11 +153,25 @@ struct RootView: View {
         .scrollIndicators(.hidden)
     }
 
-    private func landscapeLayout(width: CGFloat, height: CGFloat) -> some View {
-        monthPager(availableSize: CGSize(width: width - 28, height: height - 120),
-                   containerWidth: width)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    /// 横屏：月历在可视区里居中铺满，下方不留抽屉（抽屉只在竖屏出现）。
+    ///
+    /// **为什么高度要在这一层重新量一次**：容器高度会被键盘压缩
+    /// （见 `DeviceLayout.isPortrait` 的注释 —— 这是本项目已经踩过一次的坑）。
+    /// 而横屏主屏上根本没有任何可输入控件（便签抽屉只在竖屏渲染），键盘跟主屏毫无关系，
+    /// 却会把外层 `proxy.size.height` 压掉，而横屏网格尺寸正是由这个高度算出来的
+    /// —— 于是「在新建维度 / 新增日历的输入框里唤起键盘」时，主屏日历格子跟着缩。
+    /// 修法：让这一层**忽略键盘安全区**并在此重新量高度，量到的就是键盘弹出前的真实高度。
+    ///
+    /// 刻意不在根部忽略键盘：竖屏的便签输入框依赖键盘避让把光标顶到可见区，
+    /// 根部一旦忽略，竖屏就会退化成「键盘盖住输入框」。
+    private func landscapeLayout(width: CGFloat) -> some View {
+        GeometryReader { proxy in
+            monthPager(availableSize: CGSize(width: width - 28, height: proxy.size.height - 120),
+                       containerWidth: width)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     // MARK: - 月历 + 左右滑动翻月（上/下月常驻预渲染）
@@ -177,6 +200,33 @@ struct RootView: View {
                    onMonthChange: { delta in
                        month = CalendarUtils.addMonths(delta, to: month)
                    })
+    }
+
+    // MARK: - 月份选择下拉面板
+
+    /// 面板本体（挂在 `overlay(alignment: .topLeading)` 里，落在顶栏年月正下方）。
+    @ViewBuilder
+    private var monthPickerLayer: some View {
+        if showMonthPicker {
+            MonthPickerPanel(month: month, onPick: { target in pickMonth(target) })
+                .padding(.leading, 16)
+                .padding(.top, 52)
+                .transition(.scale(scale: 0.94, anchor: .topLeading).combined(with: .opacity))
+        }
+    }
+
+    /// 透明收口层：点面板以外任意处关闭（下拉菜单的常规语义）。
+    ///
+    /// 它是独立一层、挂在面板**下面**（`overlay` 后挂的在上层），
+    /// 因此面板自己的点击不会被它吃掉。
+    @ViewBuilder
+    private var monthPickerDismissLayer: some View {
+        if showMonthPicker {
+            Color.clear
+                .contentShape(Rectangle())
+                .ignoresSafeArea()
+                .onTapGesture { showMonthPicker = false }
+        }
     }
 
     /// 三个可见月的网格日期（当月 ±1）上预建的事件索引。
@@ -227,9 +277,26 @@ struct RootView: View {
                 }
                 .accessibilityLabel("上个月")
 
-                Text(CalendarUtils.title(forMonth: month))
-                    .font(.system(size: 19, weight: .bold, design: .rounded))
+                // 年月标题即月份选择器的入口（Drop Menu）：点一下弹出 3×4 月份面板。
+                // 两侧的单箭头仍然是「前后各一月」的翻月按钮，两者不冲突。
+                Button {
+                    showMonthPicker.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(CalendarUtils.title(forMonth: month))
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(showMonthPicker ? 180 : 0))
+                    }
                     .frame(minWidth: 118, alignment: .center)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("选择月份")
+                .accessibilityValue(CalendarUtils.title(forMonth: month))
 
                 Button {
                     shiftMonth(1, containerWidth: containerWidth)
@@ -365,6 +432,16 @@ struct RootView: View {
             }
             triggerPulse(key)
         }
+    }
+
+    /// 月份选择器选定某月。
+    ///
+    /// 走与「今天」跳月完全相同的那条路径：翻页器只常驻渲染前后各一个月，
+    /// 跨多个月**不能**滑动（滑过去会露出未渲染的空白），因此直接重定位 + 隐式过渡动画。
+    private func pickMonth(_ target: Date) {
+        showMonthPicker = false
+        guard !CalendarUtils.isSameMonth(target, month) else { return }
+        withAnimation(.easeInOut(duration: 0.22)) { month = target }
     }
 
     private func triggerPulse(_ key: String) {

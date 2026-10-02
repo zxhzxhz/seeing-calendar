@@ -64,6 +64,15 @@ enum CalendarUtils {
         return calendar.date(from: parts) ?? startOfDay(date)
     }
 
+    /// 由「年 + 月」构造当月首日（月份选择器用）。日固定为 1 号，避开 2/30 之类的溢出。
+    static func startOfMonth(year: Int, month: Int) -> Date {
+        var parts = DateComponents()
+        parts.year = year
+        parts.month = month
+        parts.day = 1
+        return calendar.date(from: parts) ?? startOfDay(Date())
+    }
+
     static func addMonths(_ value: Int, to date: Date) -> Date {
         calendar.date(byAdding: .month, value: value, to: startOfMonth(date)) ?? date
     }
@@ -76,6 +85,10 @@ enum CalendarUtils {
     static func year(of date: Date) -> Int { calendar.component(.year, from: date) }
 
     static func isSameDay(_ lhs: Date, _ rhs: Date) -> Bool { calendar.isDate(lhs, inSameDayAs: rhs) }
+    /// 同年同月（月份选择器判断「这格是不是当前正在显示的那个月」用）。
+    static func isSameMonth(_ lhs: Date, _ rhs: Date) -> Bool {
+        calendar.isDate(lhs, equalTo: rhs, toGranularity: .month)
+    }
     static func isToday(_ date: Date) -> Bool { calendar.isDateInToday(date) }
 
     static func isWeekend(_ date: Date) -> Bool {

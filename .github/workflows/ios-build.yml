@@ -53,6 +53,9 @@ jobs:
       - name: Verify thumbnail lifecycle (并发合并 + 非破坏提交 + 代次纪律)
         run: swift scripts/verify_thumbnail_lifecycle.swift --strict   # 翻回来缩略图丢失即让构建失败
 
+      - name: Verify UI regressions (月份选择器 + 锁角标 + 横屏键盘压缩)
+        run: swift scripts/verify_ui_regressions.swift --strict   # 网格错行 / 角标回潮 / 键盘压扁主屏即让构建失败
+
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
