@@ -9,7 +9,10 @@ struct ContextDrawerView: View {
     let onOpenPage: (Int) -> Void
     let onNoteCommit: (String) -> Void
 
-    @State private var thumbnails: [UUID: UIImage] = [:]
+    /// 缩略图不再存在视图本地：图像表是 `ThumbnailStore.images`（单例、跨视图共享）。
+    /// 视图 `.task` 被取消不会丢掉任何已经拿到的图，也不需要「读完再整表提交」这一跳。
+    /// 单例在 `body` / `.task` 里直接取（二者都是 `@MainActor`），不做存储属性 ——
+    /// 存储属性的默认值初始化发生在非隔离的 memberwise init 里，取 `@MainActor` 单例会报警。
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -96,7 +99,7 @@ struct ContextDrawerView: View {
                                     ZStack {
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                                             .fill(Color(uiColor: .secondarySystemBackground))
-                                        if let image = thumbnails[page.uuid] {
+                                        if let image = ThumbnailStore.shared.image(page.pageSlot) {
                                             Image(uiImage: image)
                                                 .resizable()
                                                 .aspectRatio(1, contentMode: .fill)
@@ -138,17 +141,14 @@ struct ContextDrawerView: View {
     }
 
     private func loadThumbnails() async {
-        guard let pages = record?.orderedPages else {
-            thumbnails = [:]
-            return
+        guard let pages = record?.orderedPages else { return }
+        // 与月历同一套套路：先在主线程上批量把磁盘 PNG 扶入缓存（最多推进一次代次，
+        // 于是 `.task(id:)` 最多只重启一次），剩下的缺口再逐页后台合成。
+        let entries = pages.map { (slot: $0.pageSlot, page: $0) }
+        for (slot, page) in ThumbnailStore.shared.primeFromDisk(entries) {
+            if Task.isCancelled { return }
+            await ThumbnailStore.shared.load(slot, page: page)
         }
-        var result: [UUID: UIImage] = [:]
-        for page in pages {
-            if let image = await ThumbnailStore.shared.thumbnail(for: page) {
-                result[page.uuid] = image
-            }
-        }
-        thumbnails = result
     }
 }
 

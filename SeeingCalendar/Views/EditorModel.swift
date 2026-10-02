@@ -305,8 +305,26 @@ final class EditorModel {
         repository.writeDrawing(snapshot.drawing, for: page)
         repository.saveImageItems(snapshot.items, for: page)
         day.updatedAt = .now
-        if page.index == 0 {
-            Task { await ThumbnailStore.shared.regenerate(page: page) }
+        refreshThumbnails(for: page)
+    }
+
+    /// 内容已落盘后重算缩略图。
+    ///
+    /// 两个关键点：
+    ///
+    /// 1. **清空也算内容变更**。旧实现里合成函数遇到「无笔迹且无贴图」直接返回 nil，
+    ///    于是旧 PNG 原封不动地留在磁盘上 —— 清空当前页后月历上挂着清空前的缩略图，
+    ///    内容与图不符。现在 `ThumbnailRenderer` 会区分「确认为空」与「读不到」，
+    ///    「确认为空」走 `ThumbnailLoadPolicy.clear`：删磁盘 PNG、收走缓存条目、推进代次。
+    /// 2. **封面判定问模型，不复述规则**。旧写法是 `page.index == 0` —— 而「谁是封面」
+    ///    是由 `applyPageOrder` / `reindex` / `syncPageCount` 共同维持的不变量，
+    ///    在这里重写一遍它迟早会对不上（重排后就对不上）。直接问 `day.coverPage`。
+    private func refreshThumbnails(for page: DrawingPage) {
+        let isCover = day.coverPage?.uuid == page.uuid
+        Task {
+            if isCover { await ThumbnailStore.shared.regenerate(page.coverSlot, page: page) }
+            // 抽屉里的单页预览永远跟着刷新（它按页 uuid 独立缓存）。
+            await ThumbnailStore.shared.regenerate(page.pageSlot, page: page)
         }
     }
 
@@ -349,7 +367,7 @@ final class EditorModel {
         pageIndex = min(pageIndex, max(0, pages.count - 1))
         loadCurrentPage()
         if let cover = pages.first {
-            Task { await ThumbnailStore.shared.regenerate(page: cover) }
+            Task { await ThumbnailStore.shared.regenerate(cover.coverSlot, page: cover) }
         }
     }
 
@@ -388,7 +406,7 @@ final class EditorModel {
         loadCurrentPage()
         // 新的 Page 1 成为月历封面：立即重算它的缩略图。
         if let cover = pages.first {
-            Task { await ThumbnailStore.shared.regenerate(page: cover) }
+            Task { await ThumbnailStore.shared.regenerate(cover.coverSlot, page: cover) }
         }
     }
 
@@ -436,6 +454,15 @@ final class EditorModel {
 
     func clearPage() {
         canvasHost?.canvas.clearAll()
+        // 「用户把这一页清空了」是不需要离线合成就能下结论的事实，所以立刻收图：
+        // 旧缩略图当场从月历与抽屉消失，不必等 `markDirty()` 那个 2 秒防抖 +
+        // 一遍后台 PNG 合成。随后的 `save()` 会得出同样的 `.empty` 结论，幂等。
+        if let page = currentPage {
+            ThumbnailStore.shared.forget(page.pageSlot, fileName: page.thumbnailFileName)
+            if day.coverPage?.uuid == page.uuid {
+                ThumbnailStore.shared.forget(page.coverSlot, fileName: page.thumbnailFileName)
+            }
+        }
         markDirty()
     }
 
@@ -544,6 +571,9 @@ final class EditorModel {
 
     func thumbnail(forPageAt index: Int) async -> UIImage? {
         guard index >= 0, index < pages.count else { return nil }
-        return await ThumbnailStore.shared.thumbnail(for: pages[index])
+        let page = pages[index]
+        // 装载可能当场合成（缓冲区外的那一页），给足够的时间预算再回读缓存。
+        await ThumbnailStore.shared.load(page.pageSlot, page: page)
+        return ThumbnailStore.shared.image(page.pageSlot)
     }
 }

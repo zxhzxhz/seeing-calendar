@@ -10,6 +10,9 @@ struct ThumbnailImageSpec: Sendable {
 }
 
 /// Page 1 缩略图确定性离线合成：中层贴图 → 顶层笔迹，严格 1:1 输出，绝不拉伸变形。
+///
+/// 结果类型 `ThumbnailRenderResult` 与处置策略 `ThumbnailLoadPolicy` 定义在
+/// `Rendering/ThumbnailLoadPolicy.swift`（纯逻辑、无平台依赖，供 CI 门禁直接引用）。
 enum ThumbnailRenderer {
     static let canvasSize = CGSize(width: 1400, height: 1400)
     static let defaultThumbnailWidth: CGFloat = 320
@@ -49,12 +52,27 @@ enum ThumbnailRenderer {
     }
 
     /// 直接从磁盘上的笔迹文件合成 PNG（可后台执行）。
+    ///
+    /// 注意：**既没有笔迹也没有贴图**才能断言 `.empty`。
+    /// 这一条是「清空页之后月历要立刻空掉」的唯一可信依据 ——
+    /// 不能把「文件读不到」也算成空，因为 `PageRepository.addPage` 不建文件，
+    /// 新页在首次 `save()` 之前本来就没有 `.drawing`。
     static func renderPNG(drawingFile: URL,
                           images: [ThumbnailImageSpec],
-                          targetWidth: CGFloat = defaultThumbnailWidth) -> Data? {
-        let data = (try? Data(contentsOf: drawingFile)) ?? Data()
-        let drawing = (try? PKDrawing(data: data)) ?? PKDrawing()
-        guard !drawing.strokes.isEmpty || !images.isEmpty else { return nil }
-        return render(drawing: drawing, images: images, targetWidth: targetWidth).pngData()
+                          targetWidth: CGFloat = defaultThumbnailWidth) -> ThumbnailRenderResult {
+        var drawing = PKDrawing()
+        var drawingReadable = false
+        if let data = try? Data(contentsOf: drawingFile), let parsed = try? PKDrawing(data: data) {
+            drawing = parsed
+            drawingReadable = true
+        }
+
+        guard !drawing.strokes.isEmpty || !images.isEmpty else {
+            return drawingReadable ? .empty : .unreadable
+        }
+        guard let png = render(drawing: drawing, images: images, targetWidth: targetWidth).pngData() else {
+            return .failed
+        }
+        return .png(png)
     }
 }

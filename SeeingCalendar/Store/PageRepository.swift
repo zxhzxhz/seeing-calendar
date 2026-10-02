@@ -267,11 +267,19 @@ struct PageRepository {
 
     func removeFiles(for page: DrawingPage) {
         try? FileManager.default.removeItem(at: page.drawingURL)
-        try? FileManager.default.removeItem(at: AppPaths.thumbnailURL(page.thumbnailFileName))
         for record in page.images {
             try? FileManager.default.removeItem(at: AppPaths.assetURL(record.fileName))
         }
-        ThumbnailStore.shared.invalidate(page.thumbnailFileName)
+        // 内存条目必须一并收走。旧实现只删磁盘 PNG（`invalidate(fileName:)`），
+        // 而缓存现在住在单例里、不是视图 `@State` —— 不手动收的话，删页之后
+        // 月历会一直挂着那一页的旧图，而且没有任何东西会去刷新它。
+        // 封面槽位只在被删的确实是封面时才动：非封面页也共享 `dayKey`，
+        // 不看 `coverPage` 就会把当天的封面图错删。
+        let wasCover = page.day?.coverPage?.uuid == page.uuid
+        ThumbnailStore.shared.forget(page.pageSlot, fileName: page.thumbnailFileName)
+        if wasCover {
+            ThumbnailStore.shared.forget(page.coverSlot, fileName: page.thumbnailFileName)
+        }
     }
 
     /// 物理级对账：删除不再被任何记录引用的贴图文件。

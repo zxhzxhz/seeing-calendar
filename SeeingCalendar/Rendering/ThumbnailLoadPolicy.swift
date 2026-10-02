@@ -1,64 +1,68 @@
 import Foundation
 
-/// 缩略图装载策略：**纯逻辑**，不依赖 SwiftUI / SwiftData / UIImage，
-/// 因此可被 `scripts/verify_thumbnail_lifecycle.swift` 直接引用验证。
+/// `ThumbnailRenderer.renderPNG` 的结果。
 ///
-/// 这里固化的三条不变量，都是 1.0.18 修掉的那个 bug 的教训：
+/// **必须把「确认为空」与「读不到」分开**：二者的表象完全一样（都没有图），
+/// 但处置方向相反 ——
+/// - 确认为空：内容确实被清空了，月历上必须把旧图收走，否则会挂着清空前的残影，
+///   缩略图与内容不符；
+/// - 读不到：笔迹文件还没落盘 / 数据损坏，此时**绝不能**动已有的图 ——
+///   一次读盘抖动就擦掉用户的缩略图，比不刷新严重得多。
 ///
-/// 1. **非破坏提交**：一批装载结果只写入新增/更新与删除项，**绝不整表覆盖**。
-///    月历格子里已有的图若在本次结果里缺失（并发合并失败、关系读取为空、
-///    该格不属于当前网格），绝不能因此把已有的图擦掉 —— 整表覆盖正是
-///    「9→10 能看到 9/30 缩略图、10→11→10 回来就没了」的直接成因。
-/// 2. **代次变化才重解析**：内容代次没变时，已有图直接复用（不再重复解析）；
-///    代次变了才逐格重新解析 —— 因为代次变化意味着可能有页被删除或重建，
-///    此时也要把已失效的本地条目**主动移除**，否则会留下删除前的残影。
-/// 3. **装载补齐不推进代次**：只是把缓存补齐（cache fill）不算内容变化，
-///    不应让整棵月历树的等值短路失效。
+/// `PageRepository.addPage` 不建笔迹文件，新页在首次 `save()` 之前本来就没有 `.drawing`，
+/// 所以「文件不存在」是**正常状态**，不能当成「这一页是空的」。
+enum ThumbnailRenderResult: Sendable {
+    /// 合成成功。
+    case png(Data)
+    /// 笔迹文件读得到，且笔迹与贴图都为空。**权威结论：这一页没有内容。**
+    case empty
+    /// 笔迹文件读不到 —— 不下任何结论。
+    case unreadable
+    /// 合成或 PNG 编码失败。
+    case failed
+}
+
+/// 缩略图处置策略：**纯逻辑**，不依赖 SwiftUI / SwiftData / PencilKit / UIImage，
+/// 因此可被 `scripts/verify_thumbnail_lifecycle.swift` 直接引用验证
+/// （门禁脚本另有一份镜像实现，并带文本同步护栏，两边漂移即让构建失败）。
+///
+/// 固化的不变量：
+///
+/// 1. **「确认为空」才允许删除**。清空一页之后，月历上必须立刻空掉；但**只有**
+///    把笔迹与贴图实读一遍、确认真的没有内容，才允许执行删除。
+///    「文件读不到」「合成失败」都不算证据。
+/// 2. **拿到结论就推进代次，无论来自哪条路径**。推进代次会让整棵月历树重新拉取；
+///    装载路径刚合成出来的图也必须能被看见，所以它也推进 —— 而上一版把装载当成
+///    “只补缓存不推进”，结果新合成的图跨不过 `MonthPager` 的等值短路，
+///    这正是冷启动一直空白的结构性原因。
+///    不至于死循环：`images[key] != nil` 与 `emptySlots.contains(key)` 两个前置短路
+///    保证下一轮 `load` 不再产生写入。
+/// 3. **`.preserve` 永不推进**。拿不到结论还推进代次是有害的：月历白拉一轮，
+///    而且把“还没读出来”伪装成“已经是最新的”。
 enum ThumbnailLoadPolicy {
-    /// 单格在本次装载中的处置方式。
-    enum Resolution: Equatable {
-        /// 已有有效图且代次未变 → 直接复用，不解析。
-        case keep
-        /// 需要解析（本地没有，或代次变了需要重新确认）。
-        case resolve
-        /// 代次变了且这一格已无封面页 → 本地条目失效，应移除。
-        case drop
+    /// 一次合成结果对缓存条目的处置方式。
+    enum Disposition: Equatable {
+        /// 有新图 → 写入缓存。
+        case commit
+        /// **权威确认无内容** → 移除缓存条目、删除磁盘 PNG。
+        case clear
+        /// 拿不到结论 → 现有条目原样保留。
+        case preserve
     }
 
-    /// 单格处置判定。
-    ///
-    /// - Parameters:
-    ///   - hasImage: 本地当前是否已有图。
-    ///   - versionChanged: 内容代次是否相对上次装载发生变化。
-    ///   - coverExists: 该日期键当前是否还有封面页（`DayRecord.coverPage != nil`）。
-    static func resolution(hasImage: Bool, versionChanged: Bool, coverExists: Bool) -> Resolution {
-        if versionChanged {
-            return coverExists ? .resolve : .drop
+    /// 处置判定。入参是 `ThumbnailRenderer.renderPNG` 的结果。
+    static func disposition(for result: ThumbnailRenderResult) -> Disposition {
+        switch result {
+        case .png:                   return .commit
+        case .empty:                 return .clear
+        case .unreadable, .failed:   return .preserve
         }
-        return hasImage ? .keep : .resolve
     }
 
-    /// 批次提交阈值：攒够这么多张再写一次 `@State`，把 42 格的更新次数压到个位数。
-    static let batchSize = 8
-
-    /// 把一批结果并入本地表。
-    ///
-    /// - Returns: 本地表中受影响的条目数（便于门禁断言与日志）。
-    @discardableResult
-    static func merge<T: Equatable>(
-        _ local: inout [String: T],
-        resolved: [String: T],
-        dropped: Set<String>
-    ) -> Int {
-        var touched = 0
-        for (key, value) in resolved where local[key] != value {
-            local[key] = value
-            touched += 1
-        }
-        // 只删「本次明确判定失效」的键，不顺手清空其它任何条目。
-        for key in dropped where local.removeValue(forKey: key) != nil {
-            touched += 1
-        }
-        return touched
+    /// 只有拿到了明确结论（有图 / 确认为空）才推进内容代次。
+    /// 「拿不到结论」推进代次是有害的：月历会白拉一轮，而且把「还没读出来」
+    /// 伪装成「已经是最新的」。
+    static func advancesVersion(_ disposition: Disposition) -> Bool {
+        disposition != .preserve
     }
 }

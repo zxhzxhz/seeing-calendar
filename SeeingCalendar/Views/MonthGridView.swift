@@ -20,9 +20,9 @@ struct MonthGridView: View, Equatable {
     let contentToken: Int
     /// 缩略图内容代次（`ThumbnailStore.shared.version`，由父层读出传入）。
     ///
-    /// **必须参与等值判定**：缩略图渲染结果存在本视图的 `@State` 里，父层看不到，
-    /// 「缓存已补齐」这件事只能靠这个代次传进来。若它不参与比较，`EquatableView`
-    /// 短路会把补齐所需的那次重算直接吃掉 —— 格子就一直停在空图上（1.0.18 的 bug）。
+    /// **必须参与等值判定**：图像表住在 `ThumbnailStore`（`@Observable` 单例），
+    /// 而 `EquatableView` 的短路是按**存储属性**逐项比对的 —— 父层不把这个代次传进来，
+    /// 「缓存已变」这个事实就跨不过 `MonthPager` 的那道短路，格子会一直停在空图上。
     let thumbnailVersion: Int
     let availableSize: CGSize
     /// 「今天」定位脉冲高亮的日期键与代次。
@@ -50,9 +50,12 @@ struct MonthGridView: View, Equatable {
             && lhs.thumbnailVersion == rhs.thumbnailVersion
     }
 
-    @State private var thumbnails: [String: UIImage] = [:]
-    /// 本地表是按哪个内容代次校验过的。
-    @State private var loadedVersion: Int = -1
+    /// 本地只有两个时间戳类的点按状态，**不再持有缩略图**。
+    ///
+    /// 1.0.20 之前的教训：把图像表放在视图的 `@State` 里，装载结果就活在任务栈上，
+    /// `.task(id:)` 一被父层指纹取消就全丢 —— 表现为冷启动空白、点一下才出现。
+    /// 现在图像表是 `ThumbnailStore.images`（单例、跨视图共享、跨取消存活），
+    /// 本视图只**读**不**存**。
     @State private var lastTapKey: String?
     @State private var lastTapDate: Date?
 
@@ -162,9 +165,11 @@ struct MonthGridView: View, Equatable {
         let inMonth = CalendarUtils.month(of: date) == CalendarUtils.month(of: month)
         // 内置假期事件不画胶囊（班休样式 + 节日名角标已经表达了它），避免与手绘争焦点。
         let capsuleEvents = (eventsByDay[key] ?? []).filter { !$0.isHoliday }
+        // 纯字典查找：不碰 SwiftData、不做 IO。`coverSlot` 只读 `DayRecord.key` 这个存储属性。
+        let thumbnail = record.map { ThumbnailStore.shared.image($0.coverSlot) } ?? nil
         return DayCellView(date: date,
                            inCurrentMonth: inMonth,
-                           thumbnail: thumbnails[key],
+                           thumbnail: thumbnail,
                            pageCount: record?.pageCount ?? 0,   // 冗余字段，不触发关系 fault
                            events: capsuleEvents,
                            holiday: holidays[key] ?? .normal,
@@ -199,54 +204,27 @@ struct MonthGridView: View, Equatable {
         "\(CalendarUtils.key(for: CalendarUtils.startOfMonth(month)))|\(key)"
     }
 
-    /// 装载缩略图：**分批增量提交，绝不整表覆盖**。
+    /// 装载缩略图：**磁盘批量补齐（单次代次推进）→ 缓冲区外才后台合成**。
     ///
-    /// 旧实现最后一句 `thumbnails = result` 是这个 bug 的另一半原因：
-    /// 只要某一格在本次结果里缺失（并发合并抢输、封面关系读空），本来已经显示着的图
-    /// 就会被一起抹掉；而 `records` 是整个工作区的全量字典、`coverPage` 又是延迟加载关系，
-    /// 「缺失」并不是异常状态。现在缺失只会让该格保持原样，其它格的更新照常落地。
+    /// 本方法只负责「把 store 补齐」，图形结果不经过本方法的调用栈 ——
+    /// 所以它被取消不会丢任何东西，重跑也会因为 store 已有图而立刻收敛。
+    ///
+    /// 为什么磁盘命中要单独批量处理：冷启动时月历上有几十格都有既存 PNG，
+    /// 逐格提交会让代次跳几十下、根视图白重算几十轮。合成只发生在「这一页从未出过图」
+    /// 的少数页码上，逐格异步提交没有关系。
     private func loadThumbnails() async {
-        // 空字典 = "记录还没送到"，不是"这一天没有封面"。
-        // 这里必须区分：启动首轮若把每一格都判成 `.drop`，刚恢复出来的格子会被挨个抹掉，
-        // 而且 `loadedVersion` 还会被写成一个从未真正验证过的代次。
-        let recordsLoaded = !records.isEmpty
-        let versionChanged = loadedVersion != thumbnailVersion
-        var resolved: [String: UIImage] = [:]
-        var dropped: Set<String> = []
-        var pending = 0
-
-        func flush() {
-            guard !resolved.isEmpty || !dropped.isEmpty else { return }
-            ThumbnailLoadPolicy.merge(&thumbnails, resolved: resolved, dropped: dropped)
-            resolved.removeAll()
-            dropped.removeAll()
-            pending = 0
-        }
-
+        var entries: [(slot: ThumbnailSlot, page: DrawingPage)] = []
         for date in gridDates {
-            if Task.isCancelled { flush(); return }
             let key = CalendarUtils.key(for: date)
-            let page = records[key]?.coverPage
-            switch ThumbnailLoadPolicy.resolution(hasImage: thumbnails[key] != nil,
-                                                  versionChanged: versionChanged,
-                                                  coverExists: page != nil) {
-            case .keep:
-                continue
-            case .drop:
-                // 记录没到齐时不判定"消失"，留给下一次带 `contentToken` 的重启。
-                guard recordsLoaded else { continue }
-                dropped.insert(key)
-            case .resolve:
-                guard let page else { continue }
-                // 同页并发在 store 内部合并：两个月的网格同时要 9/30 时两边都拿得到图。
-                guard let image = await ThumbnailStore.shared.thumbnail(for: page) else { continue }
-                resolved[key] = image
-            }
-            pending += 1
-            if pending >= ThumbnailLoadPolicy.batchSize { flush() }
+            guard let record = records[key], let page = record.coverPage else { continue }
+            let slot = record.coverSlot
+            if ThumbnailStore.shared.image(slot) != nil { continue }
+            entries.append((slot, page))
         }
-        flush()
-        // 只有在记录已到齐时才能宣布"这一代已处理完"；否则下一次重启会误判代次未变。
-        if recordsLoaded { loadedVersion = thumbnailVersion }
+        let misses = ThumbnailStore.shared.primeFromDisk(entries)
+        for (slot, page) in misses {
+            if Task.isCancelled { return }
+            await ThumbnailStore.shared.load(slot, page: page)
+        }
     }
 }
