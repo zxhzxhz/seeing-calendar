@@ -182,7 +182,7 @@ func verifyScopeIsEnforced() {
 
     check(eventCode.contains("static func applies(_ scope: [UUID], to workspaceUUID: UUID) -> Bool"),
           "作用域判定只能有一份实现（SubscriptionScope），两个类型不得各写一遍")
-    check(code.contains("static func toggling(_ scope: [UUID], _ workspaceUUID: UUID) -> [UUID]"),
+    check(eventCode.contains("static func toggling(_ scope: [UUID], _ workspaceUUID: UUID) -> [UUID]"),
           "勾选切换必须也是共享实现（模型与界面不得各判一次）")
     check(eventCode.contains("static func summary(_ scope: [UUID]) -> String"),
           "作用域摘要也必须共享（界面不得自己拼「N 个维度」）")
@@ -221,8 +221,6 @@ func verifyScopeWritePath() {
           "维度被删除后必须能把它的 uuid 从作用域里摘掉")
     check(code.contains("SubscriptionScope.applies(workspaceUUIDs, to: workspaceUUID)"),
           "订阅模型必须复用共享判定，不得自己复述一遍")
-    check(code.contains("static func summary(_ scope: [UUID]) -> String"),
-          "摘要必须由共享约定给出（列表行与控件摘要不得分叉）")
     check(code.contains("var workspaceUUIDs: [UUID] = []"),
           "多选作用域必须带默认值：老库升级依赖 SwiftData 轻量迁移")
 

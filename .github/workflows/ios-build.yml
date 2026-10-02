@@ -44,6 +44,9 @@ jobs:
       - name: Swift lint (机械体检 + 已知陷阱门禁)
         run: python3 scripts/swift_lint.py
 
+      - name: Gate preflight (门禁自身的笔误：变量越界 / 目标文件写错)
+        run: python3 scripts/gate_preflight.py   # 一行笔误即让整条流水线作废，先在这里拦住
+
       - name: Verify canvas transform math (real CoreGraphics)
         run: swift scripts/verify_transform_math.swift --strict   # 不变量不成立即让构建失败
 
