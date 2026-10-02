@@ -100,7 +100,11 @@ struct SubscriptionDTO: Codable, Sendable {
     var name: String
     var urlString: String
     var colorHex: String
-    var workspaceUUID: UUID?
+    /// 【旧版】单选作用域，**只为了能读回旧备份**；新备份不再写它（nil 时合成编码器直接省略键）。
+    var workspaceUUID: UUID? = nil
+    /// 多选作用域（**空 = 全局**）。声明为可选 → 合成解码器用 `decodeIfPresent`，
+    /// 旧备份里没有这个键即 nil，不会报 `keyNotFound`（与 `CalendarEvent.isHoliday` 同一手法）。
+    var workspaceUUIDs: [UUID]? = nil
     var isEnabled: Bool
 }
 

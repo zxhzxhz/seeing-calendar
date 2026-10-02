@@ -153,11 +153,14 @@ enum RestoreApplier {
         // 4. 订阅源
         var knownSubscriptions = Set(((try? context.fetch(FetchDescriptor<ICSSubscription>())) ?? []).map(\.uuid))
         for dto in bundle.database.subscriptions where !knownSubscriptions.contains(dto.uuid) {
+            // 作用域：新备份读 `workspaceUUIDs`（空数组就是全局，不能被当成「没写」而回退），
+            // 旧备份没有这个键，才回退到旧版单选字段。
+            let scope = dto.workspaceUUIDs ?? dto.workspaceUUID.map { [$0] } ?? []
             let subscription = ICSSubscription(uuid: dto.uuid,
                                                name: dto.name,
                                                urlString: dto.urlString,
                                                colorHex: dto.colorHex,
-                                               workspaceUUID: dto.workspaceUUID,
+                                               scope: scope,
                                                isEnabled: dto.isEnabled)
             context.insert(subscription)
             knownSubscriptions.insert(dto.uuid)

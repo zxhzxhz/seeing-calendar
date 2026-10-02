@@ -17,7 +17,8 @@ struct SubscriptionSnapshot: Sendable {
     let name: String
     let colorHex: String
     let url: URL
-    let workspaceUUID: UUID?
+    /// 作用域：**空 = 全局**（与 `SubscriptionScope` 同一约定）。
+    let scope: [UUID]
     /// 内置节假日凭据：读包内资源（不走网络）、覆盖全部年份、且不画日格胶囊。
     let isHoliday: Bool
 }
@@ -77,7 +78,7 @@ final class CalendarEventStore {
                                                 name: subscription.name,
                                                 colorHex: subscription.colorHex,
                                                 url: URL(string: "file:///\(source.fileName)")!,
-                                                workspaceUUID: subscription.workspaceUUID,
+                                                scope: subscription.workspaceUUIDs,
                                                 isHoliday: true)
                 }
                 guard let url = CalendarEventStore.normalizedURL(subscription.urlString) else { return nil }
@@ -85,7 +86,7 @@ final class CalendarEventStore {
                                             name: subscription.name,
                                             colorHex: subscription.colorHex,
                                             url: url,
-                                            workspaceUUID: subscription.workspaceUUID,
+                                            scope: subscription.workspaceUUIDs,
                                             isHoliday: false)
             }
 
@@ -234,7 +235,8 @@ final class CalendarEventStore {
                                             start: occurrence.start,
                                             end: occurrence.end,
                                             isAllDay: event.isAllDay,
-                                            isHoliday: snapshot.isHoliday))
+                                            isHoliday: snapshot.isHoliday,
+                                            scope: snapshot.scope))
             }
         }
         return output

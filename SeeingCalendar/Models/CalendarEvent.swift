@@ -14,6 +14,12 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     var isAllDay: Bool
     /// 来自内置节假日凭据（放假 / 调休）。这类事件不画日格胶囊，只驱动班休样式与角标。
     var isHoliday: Bool = false
+    /// 作用域快照：来源订阅绑在哪些维度上（**空 = 全局**）。
+    ///
+    /// 为什么要随事件一起落缓存：显示层是在月历渲染那一刻按**当前维度**筛的，
+    /// 而那一刻没有订阅模型可用（缓存可能比订阅列表还新）。作用域跟着事件走，
+    /// 离线也不会把维度归属算错。
+    var scope: [UUID] = []
 
     var dayKey: String { CalendarUtils.key(for: start) }
 
@@ -44,7 +50,8 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
          start: Date,
          end: Date,
          isAllDay: Bool,
-         isHoliday: Bool = false) {
+         isHoliday: Bool = false,
+         scope: [UUID] = []) {
         self.id = id
         self.subscriptionUUID = subscriptionUUID
         self.subscriptionName = subscriptionName
@@ -55,6 +62,7 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         self.end = end
         self.isAllDay = isAllDay
         self.isHoliday = isHoliday
+        self.scope = scope
     }
 
     // MARK: - Codable
@@ -63,7 +71,7 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     /// 合成解码器会直接抛 `keyNotFound`（不理会默认值），所以这里显式用 `decodeIfPresent`。
     private enum CodingKeys: String, CodingKey {
         case id, subscriptionUUID, subscriptionName, colorHex, title
-        case location, start, end, isAllDay, isHoliday
+        case location, start, end, isAllDay, isHoliday, scope
     }
 
     init(from decoder: Decoder) throws {
@@ -78,6 +86,39 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         end = try container.decode(Date.self, forKey: .end)
         isAllDay = try container.decode(Bool.self, forKey: .isAllDay)
         isHoliday = try container.decodeIfPresent(Bool.self, forKey: .isHoliday) ?? false
+        // 全量重取会覆盖缓存，旧缓存里没有作用域 —— 缺字段按「全局」，
+        // 顶多在下一次刷新前多显示几个维度，不会把事件藏起来。
+        scope = try container.decodeIfPresent([UUID].self, forKey: .scope) ?? []
+    }
+}
+
+/// 订阅作用域判定（**空 = 全局**）。
+///
+/// 单独抽出来的理由很实在：订阅模型（`ICSSubscription`）与事件快照（`CalendarEvent`）
+/// 都要判定同一件事，两边各写一遍迟早会漂移 —— 一边改了另一边没改，
+/// 表现是「设置页写着 2 个维度，月历上却在别的维度也显示」，最难查的一种 bug。
+enum SubscriptionScope {
+    /// 空作用域 = 全局，任何维度都命中。
+    static func applies(_ scope: [UUID], to workspaceUUID: UUID) -> Bool {
+        scope.isEmpty || scope.contains(workspaceUUID)
+    }
+
+    /// 摘要：**空 = 全局，非空只报数量**。
+    ///
+    /// 只报数量、不拼维度名：用户自建的维度名可能很长，拼进来会让那一行的高度
+    /// 随名字变化，列表看起来在抖。
+    static func summary(_ scope: [UUID]) -> String {
+        scope.isEmpty ? "全局（所有维度）" : "\(scope.count) 个维度"
+    }
+
+    /// 作用于行的勾选切换。
+    ///
+    /// 全局态（空作用域）下的第一次勾选不是「追加」而是「脱离全局」——
+    /// 空数组不含任何 uuid，`scope + [uuid]` 天然给出「只选这一个」，无需特判。
+    /// 反向也成立：取消到最后一个维度时回到空数组 = 全局，
+    /// 界面上表现为「全局」那行重新亮起，是可见的，不是静默漂移。
+    static func toggling(_ scope: [UUID], _ workspaceUUID: UUID) -> [UUID] {
+        scope.contains(workspaceUUID) ? scope.filter { $0 != workspaceUUID } : scope + [workspaceUUID]
     }
 }
 

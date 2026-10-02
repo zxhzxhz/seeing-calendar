@@ -55,6 +55,13 @@ struct PageRepository {
         for page in orphanPages {
             removeFiles(for: page)
         }
+        // 订阅作用域里也得摘掉这个维度。不摘的后果不是报错，而是**静默失效**：
+        // 只绑在该维度上的订阅从此哪个维度都不命中，月历上什么都没有。
+        // 摘空即回到全局（可见、且设置页如实写着“全局”），比藏起来好排查。
+        let subscriptions = (try? context.fetch(FetchDescriptor<ICSSubscription>())) ?? []
+        for subscription in subscriptions {
+            subscription.removeFromScope(workspace.uuid)
+        }
         context.delete(workspace)
         try? context.save()
         cleanupOrphanAssets()

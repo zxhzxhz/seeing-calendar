@@ -14,7 +14,8 @@ struct SubscriptionsView: View {
 
     @State private var newName = ""
     @State private var newURL = ""
-    @State private var newScope: UUID?
+    @State private var newScope: [UUID] = []
+    @State private var isNewScopeExpanded = false
     @State private var newColor = SubscriptionPalette.color(at: 0)
     @State private var editingSubscription: ICSSubscription?
     @State private var workspaceName = ""
@@ -57,7 +58,7 @@ struct SubscriptionsView: View {
                 } header: {
                     Text("订阅源（\(subscriptions.count)）")
                 } footer: {
-                    Text("订阅作用域可设为全局（所有维度可见）或仅绑定当前维度。ICS 内容只以微型胶囊/彩点呈现，不干扰手绘主视觉。点按自建订阅可改名称与作用域；两条内置凭据固定置底、不可删除 —— 不想用请关掉它的开关。")
+                    Text("订阅作用域可设为全局（所有维度可见），也可多选具体维度。ICS 内容只以微型胶囊/彩点呈现，不干扰手绘主视觉。点按自建订阅可改名称与作用域；两条内置凭据固定置底、不可删除 —— 不想用请关掉它的开关。")
                 }
 
                 // 内置假期凭据：本地优先（随包发行，冷启动零网络即可正确着色），可联网取最新版。
@@ -104,12 +105,9 @@ struct SubscriptionsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    Picker("作用域", selection: $newScope) {
-                        Text("全局").tag(UUID?.none)
-                        ForEach(workspaces) { workspace in
-                            Text(workspace.name).tag(UUID?.some(workspace.uuid))
-                        }
-                    }
+                    subscriptionScopeRows(scope: $newScope,
+                                         workspaces: workspaces,
+                                         isExpanded: $isNewScopeExpanded)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(SubscriptionPalette.colors, id: \.self) { hex in
@@ -219,6 +217,7 @@ struct SubscriptionsView: View {
                             .lineLimit(1)
                         HStack(spacing: 6) {
                             Text(scopeLabel(for: subscription))
+                                .lineLimit(1)
                             if let last = subscription.lastFetched {
                                 Text("· 更新于 \(CalendarUtils.timeString(last))")
                             }
@@ -258,8 +257,12 @@ struct SubscriptionsView: View {
     }
 
     private func scopeLabel(for subscription: ICSSubscription) -> String {
-        guard let uuid = subscription.workspaceUUID else { return "全局" }
-        return workspaces.first { $0.uuid == uuid }?.name ?? "已删除维度"
+        guard !subscription.workspaceUUIDs.isEmpty else { return "全局" }
+        // 磁盘上的旧数据可能引用已经不存在的维度（例如从旧备份恢复、而备份里缺那块画板），
+        // 所以这里保留「已删除维度」兜底，而不是直接干掉那一项。
+        return subscription.workspaceUUIDs
+            .map { uuid in workspaces.first { $0.uuid == uuid }?.name ?? "已删除维度" }
+            .joined(separator: "、")
     }
 
     private func addSubscription() {
@@ -269,12 +272,12 @@ struct SubscriptionsView: View {
         let subscription = ICSSubscription(name: name,
                                            urlString: url,
                                            colorHex: newColor,
-                                           workspaceUUID: newScope)
+                                           scope: newScope)
         context.insert(subscription)
         try? context.save()
         newName = ""
         newURL = ""
-        newScope = nil
+        newScope = []
         newColor = SubscriptionPalette.color(at: subscriptions.count + 1)
         Task { await eventStore.refresh(subscriptions: subscriptions, force: true) }
     }
@@ -296,12 +299,12 @@ struct SubscriptionsView: View {
     /// 作用域会改变 `applies(to:)` 的判定结果，改了就必须重取日程 —— 否则日格上
     /// 还挂着按旧作用域算出来的彩点。只改名称则不必打网络：名称是活模型上的字段，
     /// 抽屉与图例直接读它，没有需要重算的缓存。
-    private func applyEdit(_ subscription: ICSSubscription, name: String, scope: UUID?) {
+    private func applyEdit(_ subscription: ICSSubscription, name: String, scope: [UUID]) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        let scopeChanged = subscription.workspaceUUID != scope
+        let scopeChanged = Set(subscription.workspaceUUIDs) != Set(scope)
         subscription.name = trimmed
-        subscription.workspaceUUID = scope
+        subscription.setScope(scope)
         try? context.save()
         guard scopeChanged else { return }
         Task { await eventStore.refresh(subscriptions: subscriptions, force: true) }
@@ -358,19 +361,21 @@ private struct SubscriptionEditorSheet: View {
 
     let subscription: ICSSubscription
     let workspaces: [Workspace]
-    let onSave: (String, UUID?) -> Void
+    let onSave: (String, [UUID]) -> Void
 
     @State private var name: String
-    @State private var scope: UUID?
+    @State private var scope: [UUID]
+    /// 展开状态自己持有：新增区与编辑面板各自折叠，互不影响。
+    @State private var isScopeExpanded = false
 
     init(subscription: ICSSubscription,
          workspaces: [Workspace],
-         onSave: @escaping (String, UUID?) -> Void) {
+         onSave: @escaping (String, [UUID]) -> Void) {
         self.subscription = subscription
         self.workspaces = workspaces
         self.onSave = onSave
         _name = State(initialValue: subscription.name)
-        _scope = State(initialValue: subscription.workspaceUUID)
+        _scope = State(initialValue: subscription.workspaceUUIDs)
     }
 
     private var trimmedName: String {
@@ -384,12 +389,9 @@ private struct SubscriptionEditorSheet: View {
                     TextField("订阅名称", text: $name)
                 }
                 Section {
-                    Picker("作用域", selection: $scope) {
-                        Text("全局").tag(UUID?.none)
-                        ForEach(workspaces) { workspace in
-                            Text(workspace.name).tag(UUID?.some(workspace.uuid))
-                        }
-                    }
+                    subscriptionScopeRows(scope: $scope,
+                                         workspaces: workspaces,
+                                         isExpanded: $isScopeExpanded)
                     LabeledContent("地址") {
                         Text(subscription.urlString)
                             .font(.system(size: 11))
@@ -399,7 +401,7 @@ private struct SubscriptionEditorSheet: View {
                 } header: {
                     Text("作用域")
                 } footer: {
-                    Text("作用域决定这条订阅的日程出现在哪些维度里；选「全局」对所有维度可见。地址不在这里改 —— 改地址等于换一条订阅，请新建。")
+                    Text("地址不在这里改 —— 改地址等于换一条订阅，请新建。两条内置凭据不在此面板里，它们固定置底且不可删除。")
                 }
             }
             .navigationTitle("编辑订阅源")

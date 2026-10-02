@@ -7,6 +7,7 @@ struct SeeingCalendarApp: App {
 
     init() {
         container = AppDataStack.makeContainer()
+        AppDataStack.migrateSubscriptionScopes(in: container)
     }
 
     var body: some Scene {

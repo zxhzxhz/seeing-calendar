@@ -115,7 +115,7 @@ final class BackupCoordinator {
                             name: $0.name,
                             urlString: $0.urlString,
                             colorHex: $0.colorHex,
-                            workspaceUUID: $0.workspaceUUID,
+                            workspaceUUIDs: $0.workspaceUUIDs,
                             isEnabled: $0.isEnabled)
         }
 

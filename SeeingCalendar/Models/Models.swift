@@ -197,8 +197,13 @@ final class ICSSubscription {
     var name: String
     var urlString: String
     var colorHex: String
-    /// nil = 全局应用（所有维度可见）
+    /// 【旧版单选作用域】`nil` = 全局。**只读兼容字段**：一次性迁移
+    /// （`AppDataStack.migrateSubscriptionScopes`）把它搬进 `workspaceUUIDs` 并随即置 nil，
+    /// 之后一律写 nil —— 所以「这个字段非空」永远只意味着「还没迁移」。
     var workspaceUUID: UUID?
+    /// 作用域：**空数组 = 全局**（所有维度可见）；非空 = 只在列出的维度可见。
+    /// 带默认值 → SwiftData 轻量迁移，老库升级无需重建（与 `isBuiltIn` 同一套路）。
+    var workspaceUUIDs: [UUID] = []
     var isEnabled: Bool
     var lastFetched: Date?
     var lastError: String?
@@ -211,7 +216,7 @@ final class ICSSubscription {
          name: String,
          urlString: String,
          colorHex: String,
-         workspaceUUID: UUID? = nil,
+         scope: [UUID] = [],
          isEnabled: Bool = true,
          lastFetched: Date? = nil,
          lastError: String? = nil,
@@ -220,7 +225,8 @@ final class ICSSubscription {
         self.name = name
         self.urlString = urlString
         self.colorHex = colorHex
-        self.workspaceUUID = workspaceUUID
+        self.workspaceUUID = nil
+        self.workspaceUUIDs = scope
         self.isEnabled = isEnabled
         self.lastFetched = lastFetched
         self.lastError = lastError
@@ -240,8 +246,32 @@ final class ICSSubscription {
     /// 假期类订阅不参与日格胶囊绘制（只驱动班休样式与角标），但仍会出现在抽屉里。
     var isHolidaySource: Bool { bundledSource != nil }
 
+    /// 该订阅的日程是否出现在指定维度里。
+    ///
+    /// 判定规则与事件快照共用 `SubscriptionScope`，不在这里复述一遍：
+    /// 两处各写一份的话，总有一边会先改。
     func applies(to workspaceUUID: UUID) -> Bool {
-        self.workspaceUUID == nil || self.workspaceUUID == workspaceUUID
+        SubscriptionScope.applies(workspaceUUIDs, to: workspaceUUID)
+    }
+
+    /// 作用域的唯一写入入口（全局传空数组）。
+    ///
+    /// 顺手把旧字段清掉：迁移的幂等性就靠这一点 —— 迁移只处理「旧字段非空」的记录，
+    /// 而任何一次新的写入都已经把旧字段腾空了，重复迁移不会把旧值又盖回来。
+    func setScope(_ scope: [UUID]) {
+        workspaceUUIDs = scope
+        workspaceUUID = nil
+    }
+
+    /// 维度被删除时把它的 uuid 从作用域里摘掉，返回值表示作用域是否因此发生变化。
+    ///
+    /// 不摘的后果不是报错，而是**静默消失**：一条只绑在该维度上的订阅从此哪个维度都不命中，
+    /// 月历上什么都没有，用户只能靠设置页那行「已删除维度」猜到发生了什么。
+    @discardableResult
+    func removeFromScope(_ workspaceUUID: UUID) -> Bool {
+        guard workspaceUUIDs.contains(workspaceUUID) else { return false }
+        setScope(workspaceUUIDs.filter { $0 != workspaceUUID })
+        return true
     }
 
     /// 订阅源的展示顺序：用户自建在上、内置凭据恒定居底。

@@ -140,7 +140,7 @@ struct RootView: View {
                 Divider()
                 ContextDrawerView(date: selectedDate,
                                   record: selectedRecord,
-                                  events: eventStore.events(on: selectedDate),
+                                  events: scopedEvents(on: selectedDate),
                                   onOpenPage: { pageIndex in openDay(selectedDate, pageIndex: pageIndex) },
                                   onNoteCommit: { text in
                                       let target = workspace ?? repository.ensureDefaultWorkspace()
@@ -229,15 +229,27 @@ struct RootView: View {
         }
     }
 
+    /// 当前维度下这一天该显示的事件（**作用域在这里生效**）。
+    ///
+    /// 抽屉走这里，月历走 `pagedEvents`；两边都调 `SubscriptionScope.applies`，
+    /// 判定只有一份，两个界面不可能给出不同答案。
+    private func scopedEvents(on date: Date) -> [CalendarEvent] {
+        guard let workspaceUUID = workspace?.uuid else { return [] }
+        return eventStore.events(on: date)
+            .filter { SubscriptionScope.applies($0.scope, to: workspaceUUID) }
+    }
+
     /// 三个可见月的网格日期（当月 ±1）上预建的事件索引。
     ///
     /// 只在 `RootView.body` 里算一次，翻页手势期间不再重算（手势状态不在 RootView 里）。
     private var pagedEvents: [String: [CalendarEvent]] {
+        guard let workspaceUUID = workspace?.uuid else { return [:] }
         var index: [String: [CalendarEvent]] = [:]
         for delta in [-1, 0, 1] {
             for date in CalendarUtils.gridDates(forMonthContaining: CalendarUtils.addMonths(delta, to: month)) {
                 let key = CalendarUtils.key(for: date)
-                let events = eventStore.events(onDayKey: key).filter { !$0.isHoliday }
+                let events = eventStore.events(onDayKey: key)
+                    .filter { !$0.isHoliday && SubscriptionScope.applies($0.scope, to: workspaceUUID) }
                 if !events.isEmpty { index[key] = events }
             }
         }
@@ -260,6 +272,9 @@ struct RootView: View {
         }
         token = token &* 31 &+ holidayRegistry.version
         token = token &* 31 &+ pagedEvents.count
+        // 当前维度参与指纹：切维度时事件内容变了但数量恰好相同（两边都是 3 条）的话，
+        // 光看计数会误判成「没变化」，月历就会把上一块画板的彩点接着画下去。
+        token = token &* 31 &+ (workspace?.uuid.uuidString.hashValue ?? 0)
         return token
     }
 
