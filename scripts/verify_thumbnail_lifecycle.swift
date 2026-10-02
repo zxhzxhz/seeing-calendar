@@ -120,7 +120,9 @@ func verifyProductionSourceSync() {
                 "case .unreadable, .failed: return .preserve"] {
         check(flatPolicy.contains(arm), "ThumbnailLoadPolicy 缺少处置臂：`\(arm)`")
     }
-    check(flatPolicy.contains("return disposition != .preserve"),
+    // 比表达式而不是比“带了 return 的整行”：单表达式函数体里的 `return` 是可省的，
+    // 护栏钉的是语义（只有 preserve 不推进代次），不是句法写法。
+    check(flatPolicy.contains("disposition != .preserve"),
           "ThumbnailLoadPolicy.advancesVersion 必须只对 preserve 返回 false")
 
     guard let renderer = productionSource("SeeingCalendar/Rendering/ThumbnailRenderer.swift") else {
