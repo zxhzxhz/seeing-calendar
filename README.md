@@ -107,7 +107,7 @@ ICS 日程相应降级为微胶囊 → 彩点 → 单微点，手绘始终占据
 | 单张贴图：等比四角 / 无损裁剪四边 / 顶部旋转（1° 步进 + 15/45/90° 吸附触觉） | ✅ |
 | 贴图入场智能缩放（1:1 居中 / Aspect Fit 90% 安全区）、拷贝/替换/置顶/置底/删除 | ✅ |
 | 倒带历史（30 步：笔迹 + 贴图状态统一快照） | ✅ |
-| ICS 订阅（RFC5545 子集 + RRULE 展开 + 全局/维度作用域 + 彩点/胶囊降级呈现） | ✅ |
+| ICS 订阅（RFC5545 子集 + RRULE 展开 + 多选维度作用域 + 彩点/胶囊降级呈现） | ✅ |
 | 节假日班/休：`HolidayProviderProtocol` 协议抽象 + 注入点 + UI 锚点 | ✅（数据待注入） |
 | `.vcal` 完整备份 / 定时快照（保留 3 份）/ 双模式恢复 / CRC + 指纹校验 | ✅ |
 | 竖屏动态扩展区：日程时间轴 + 多页轮播 + 便签快捷记录 | ✅ |
@@ -126,8 +126,13 @@ ICS 日程相应降级为微胶囊 → 彩点 → 单微点，手绘始终占据
 5. **未签名 ipa**：CI 无证书，构建时显式 `CODE_SIGNING_ALLOWED=NO`，交付物需自行签名安装。
 6. **极小格触控**：Slide Over（1/3 分屏）下 LOD1 单格约 45pt，目前依靠整格 `contentShape` 热区 + 双击进全屏编辑；
    spec 4.3 建议的气泡放大镜（Popover Preview）未实现，避免引入额外的预览合成开销。
-7. **节假日班/休**：严格按 spec 只交付 `HolidayProviderProtocol` 协议抽象 + `HolidayRegistry` 注入点 +
-   UI 锚点（日历格内的红/灰角标），无内置年度数据（可由远端配置随时注入）。
+7. **节假日班/休**：`HolidayProviderProtocol` 协议抽象 + `HolidayRegistry` 注入点 + UI 锚点；
+   自 1.0.17 起另有两条**随包发行**的内置凭据（`holidayCal-HO` 放假 / `holidayCal-CO` 调休，覆盖 2022–2026），
+   默认开启、固定置底且不可删除（不要用请关开关），冷启动零网络即可正确着色。
+8. **订阅作用域**：**空作用域 = 全局**，「全局」行与维度行互斥。
+   这个约定让几件事同时变简单：老库升级（旧单选字段迁移为空即全局）、
+   从旧备份恢复（缺键按全局）、维度被删除时摘空引用（回到全局而不是静默消失）。
+   代价是「一个维度都不选」与「全局」在模型上是同一个状态 —— 靠界面上「全局」行是否亮起表达，不靠文案解释。
 
 ## 7. 验证手段（无 macOS 设备下的可验证性边界）
 
@@ -136,7 +141,9 @@ ICS 日程相应降级为微胶囊 → 彩点 → 单微点，手绘始终占据
 | 编译 / 链接 / 打包 | GitHub Actions macOS runner + `xcodebuild`（Release, iOS SDK） | ✅ 0 error 0 warning |
 | 产物结构 | `zipfile` + `plistlib` 解包 ipa 校验 UTI / 方向 / 权限文案 / Bundle ID | ✅ 见 `artifacts/` |
 | `.vcal` 容器格式 | `scripts/verify_vcal_layout.py` 按 Swift 写入布局重建 → 标准 ZIP 读取器解析 | ✅ 通过 |
-| Swift 机械体检 | `scripts/swift_lint.py`（括号平衡 / 重复声明） | ✅ 通过 |
+| Swift 机械体检 | `scripts/swift_lint.py`（括号平衡 / 重复声明 / 已知陷阱） | ✅ 通过 |
+| 行为门禁（CI `--strict`） | `verify_transform_math` 225 条 · `verify_holiday_table` 25 条 · `verify_thumbnail_lifecycle` 83 条 · `verify_ui_regressions` 91 条 · `verify_subscription_management` 91 条 | ✅ 全部通过 |
+| 门禁自身的笔误 | `scripts/gate_preflight.py`（接收变量是否越界 / 断言字面量是否真能在目标文件里找到） | ✅ 通过 |
 | 运行时行为（手势 / PencilKit / SwiftData） | **需真机** | ⚠️ 待上机验收 |
 
 ## 6. 本地（macOS）直接构建
