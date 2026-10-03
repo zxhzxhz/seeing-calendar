@@ -142,7 +142,7 @@ ICS 日程相应降级为微胶囊 → 彩点 → 单微点，手绘始终占据
 | 产物结构 | `zipfile` + `plistlib` 解包 ipa 校验 UTI / 方向 / 权限文案 / Bundle ID | ✅ 见 `artifacts/` |
 | `.vcal` 容器格式 | `scripts/verify_vcal_layout.py` 按 Swift 写入布局重建 → 标准 ZIP 读取器解析 | ✅ 通过 |
 | Swift 机械体检 | `scripts/swift_lint.py`（括号平衡 / 重复声明 / 已知陷阱） | ✅ 通过 |
-| 行为门禁（CI `--strict`） | `verify_transform_math` 225 条 · `verify_holiday_table` 25 条 · `verify_thumbnail_lifecycle` 83 条 · `verify_ui_regressions` 91 条 · `verify_subscription_management` 91 条 | ✅ 全部通过 |
+| 行为门禁（CI `--strict`） | `verify_transform_math` 225 · `verify_holiday_table` 25 · `verify_thumbnail_lifecycle` 85 · `verify_ui_regressions` 91 · `verify_subscription_management` 91 · `verify_undo_history` 16（穷举 37448 条撤销序列 + 反证） | ✅ 全部通过 |
 | 门禁自身的笔误 | `scripts/gate_preflight.py`（接收变量是否越界 / 断言字面量是否真能在目标文件里找到） | ✅ 通过 |
 | 运行时行为（手势 / PencilKit / SwiftData） | **需真机** | ⚠️ 待上机验收 |
 
