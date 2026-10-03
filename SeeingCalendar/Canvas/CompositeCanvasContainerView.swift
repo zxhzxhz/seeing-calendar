@@ -327,10 +327,43 @@ final class CompositeCanvasContainerView: UIView {
         imageViews.map(\.canvasItem).sorted { $0.zIndex < $1.zIndex }
     }
 
+    /// 画布 drawing 的**唯一写入漏斗**。
+    ///
+    /// 为什么要做三件事，而不只是把新 drawing 赋给画布：
+    ///
+    /// 1. **清掉 PencilKit 自己的撤销登记**。`PKCanvasView` 会把 drawin 变更
+    ///    自动登记到 `undoManager`，而这个登记**不会因为程序化赋值而失效**
+    ///    （社区一致的现象：给画布赋新 drawing 后，撤销按钮仍然可用）。
+    ///    本应用的撤销是 `history`/`redoStack` 的 30 步快照（还含贴图与裁剪，
+    ///    PencilKit 的栈根本表示不了），两边同时存在就是**两个引擎写同一份 drawing**，
+    ///    而我们的历史永远追不上它那条链。这里直接把它清掉，
+    ///    让「本应用的 30 步历史」成为**唯一**历史。
+    ///    代价：窗口的撤销栈也会被清一次，会连带清掉正在编辑的文本框的撤销记录。
+    ///    编辑器全屏遮住主页面、且文本框不在画布上，这个代价极小；
+    ///    而代价的另一边是「被撤销的笔画自己回来」。
+    ///
+    /// 2. **强制 PencilKit 舍弃它内部的旧副本**（先清空再装入）。
+    ///    只赋一次值，PencilKit 内部可能仍持有替换前的副本，
+    ///    于是在下一笔结束时按旧副本回写 —— 现象正是**被撤销的笔画在新笔画绘完时复活**。
+    ///    同一轮 runloop 内的两次赋值不会产生可见闪烁（没有显示回合夹在中间），
+    ///    却能把它内部的旧副本顶掉。
+    ///
+    /// 3. **有笔正按在画布上时只赋一次**。
+    ///    此时清空会把进行中的那一笔置于未知状态（极端情况直接丢笔），
+    ///    而这条路径本来就是「开始落笔时把浮动选区落回画布」（见
+    ///    `canvasViewDidBeginUsingTool`），绝对不能把画布清一下再装。
+    ///    真正造成陈旧副本的是**撤销/重做/换页**这些“没有笔在画”的时机，
+    ///    那里的清空-装入才是安全的（也正是失效场景所在）。
     func setDrawing(_ drawing: PKDrawing) {
         isProgrammatic = true
-        canvasView.drawing = drawing
-        isProgrammatic = false
+        defer { isProgrammatic = false }
+        canvasView.undoManager?.removeAllActions()
+        if isToolSessionActive {
+            canvasView.drawing = drawing
+        } else {
+            canvasView.drawing = PKDrawing()
+            canvasView.drawing = drawing
+        }
     }
 
     func rebuildImageViews(_ items: [CanvasImageItem]) {
@@ -645,6 +678,19 @@ extension CompositeCanvasContainerView: PKCanvasViewDelegate {
         if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
             commitSelection(notify: true)
         }
+        // ★ 任何内容变化都让「重做」失效，而不只是在 `pushHistory()` 里失效。
+        // 理由：重做栈只在「最后一次操作是撤销」时才有意义。一旦内容变了
+        // （不管变化是我们登记的，还是别人改了画布 —— 例如 PencilKit 按它自己的
+        // 撤销登记回写），重做栈指向的就是**另一条线**的旧状态；
+        // 这时按重做就是把已经被撤销/改掉的内容搬回来。
+        invalidateRedoStack()
         onContentChange?()
+    }
+
+    /// 让重做栈失效（内容一变就必须调；幂等）。
+    func invalidateRedoStack() {
+        guard !redoStack.isEmpty else { return }
+        redoStack.removeAll()
+        notifyHistory()
     }
 }

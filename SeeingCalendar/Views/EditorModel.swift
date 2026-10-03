@@ -329,9 +329,7 @@ final class EditorModel {
     }
 
     func finishEditing() {
-        saveTask?.cancel()
-        saveTask = nil
-        save()
+        flushPendingSave()
         repository.cleanupOrphanAssets()
     }
 
@@ -446,10 +444,22 @@ final class EditorModel {
 
     func undo() {
         canvasHost?.canvas.undo()
+        // 撤销是「已定型」的动作，不是输入中的中间态：不能走 2s 去抖。
+        // 否则在存盘前退出/崩溃，磁盘上留着的还是被撤销掉的内容，
+        // 重新打开又看到它 —— 而且分不清是“没撤销”还是“撤销没落盘”。
+        flushPendingSave()
     }
 
     func redo() {
         canvasHost?.canvas.redo()
+        flushPendingSave()
+    }
+
+    /// 立即落盘，并撤掉还在去抖中的那次写盘（否则 2s 后会重复写一遍同样的内容）。
+    func flushPendingSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        save()
     }
 
     func clearPage() {
