@@ -304,7 +304,7 @@ final class CompositeCanvasContainerView: UIView {
     func load(drawing: PKDrawing, items: [CanvasImageItem], resetHistory: Bool = true) {
         // 切换页面：直接丢弃浮动选区，绝不把上一页的笔迹并入本页。
         discardSelection()
-        setDrawing(drawing)
+        installDrawing(drawing)
         rebuildImageViews(items)
         if resetHistory {
             history.removeAll()
@@ -354,16 +354,46 @@ final class CompositeCanvasContainerView: UIView {
     ///    `canvasViewDidBeginUsingTool`），绝对不能把画布清一下再装。
     ///    真正造成陈旧副本的是**撤销/重做/换页**这些“没有笔在画”的时机，
     ///    那里的清空-装入才是安全的（也正是失效场景所在）。
+    /// 页内改动（撤销 / 重做 / 选区提交 / 套索取出）写入 drawing 的**唯一**漏斗。
+    ///
+    /// ★ 关键：**只替换笔迹列表，绝不把整份 drawing 换掉**。
+    ///
+    /// `PKDrawing` 不是一串普通笔迹：Apple 自己的头文件里它带 `_uuid`、`_replicaUUID`、
+    /// `_version`（PKVectorTimestamp），是 **CRDT 式版本语义** —— 社区也早报过
+    /// “两个空白 drawing 用 == 比较不相等”。于是：
+    ///
+    ///  · 整份换上一份**旧快照** ＝ 给画布一份**旧版本**的 drawing。而“删除”在旧版本里
+    ///    还没发生 —— PencilKit 在**提交新笔画**时按版本对账，那些被删掉的笔迹算“尚未删除”，
+    ///    于是**被撤销的笔画就这么回来了**，且出现时机正好是**笔离开画布那一刻**（对账点）。
+    ///  · 改成只写 `strokes`：取的是**画布当前**的版本，只有笔迹列表不同，
+    ///    PencilKit 才能把差集当成“在当前版本上删除”落成墓碑，删除才真的生效。
+    ///    这也正是 Apple 官方推荐的程序化修改方式（改 `strokes`，而不是换整份 drawing）。
+    ///
+    /// 不用“先清空再装入”之类的技巧：那会再造一份外来版本，只会把版本谱系搞得更乱
+    /// （v1.0.25 试过，对用户报的这个现象无效）。
+    ///
+    /// 另外仍然清掉 PencilKit 自己的撤销登记：本应用的撤销是 `history`/`redoStack`
+    /// 的 30 步快照（还含贴图与裁剪，PencilKit 的栈根本表示不了），
+    /// 两套引擎并存时我们追不上它那条链。代价是窗口撤销栈也会被清一次
+    /// （会连带清掉正在编辑的文本框的撤销记录）；编辑器全屏遮住主页面、
+    /// 文本框不在画布上，代价极小。
     func setDrawing(_ drawing: PKDrawing) {
         isProgrammatic = true
         defer { isProgrammatic = false }
         canvasView.undoManager?.removeAllActions()
-        if isToolSessionActive {
-            canvasView.drawing = drawing
-        } else {
-            canvasView.drawing = PKDrawing()
-            canvasView.drawing = drawing
-        }
+        canvasView.drawing.strokes = drawing.strokes
+    }
+
+    /// 换页 / 首次装载：**整份**装入 drawing（这是全工程唯一该整份赋值的地方）。
+    ///
+    /// 与 `setDrawing` 的分工不是风格问题：换页拿到的 drawing 是从磁盘解码出来的
+    /// （全新一次解码 = 全新的内部版本谱系），与画布当前内容没有可对账的版本关系；
+    /// 而“装入某一页”本来就应该是干净起点。页内的撤销/重做则必须保留当前版本。
+    func installDrawing(_ drawing: PKDrawing) {
+        isProgrammatic = true
+        defer { isProgrammatic = false }
+        canvasView.undoManager?.removeAllActions()
+        canvasView.drawing = drawing
     }
 
     func rebuildImageViews(_ items: [CanvasImageItem]) {

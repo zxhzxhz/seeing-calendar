@@ -3,10 +3,15 @@
 //  verify_undo_history.swift
 //  撤销 / 重做历史的**可执行不变量**门禁。
 //
-//  由来：用户报「被撤销的笔画在新笔画绘完时重新出现」。
+//  由来：用户报「被撤销的笔画在新笔画绘完时重新出现」，且**出现时机是笔离开画布那一刻**。
 //  先把 `CompositeCanvasContainerView` 的 history / redoStack / 选区状态机**照抄成模型**，
-//  再穷举操作序列 —— 结论是：**这套栈在结构上不可能让被撤销的笔画自行回来**，
-//  所以病灶在 PencilKit 那一侧的集成边界（它另有一条撤销登记，程序化换 drawing 不会清掉）。
+//  再穷举操作序列 —— 结论是：**这套栈在结构上不可能让被撤销的笔画自行回来**。
+//  病灶在 PencilKit 那一侧的集成边界，而且是两层：
+//    ① 它另有一条撤销登记，程序化换 drawing 不会清掉；
+//    ② ★ `PKDrawing` 内部带 uuid/replicaUUID/version（CRDT 语义，官方头文件里能看到），
+//       整份赋回一份**旧快照** = 给画布一份旧版本的 drawing，而“删除”在旧版本里还没发生；
+//       PencilKit 在**提交新笔画**时按版本对账，被删掉的笔迹于是算“尚未删除”而复活。
+//       所以页内写入必须**只换 strokes**（取画布当前版本），换页才整份换。
 //  这份门禁把上面这段推理固化下来，防三件事：
 //
 //   ① 现在的不变量（undo 必须丢弃浮动选区、快照自包含浮动笔迹、新编辑必须清空重做栈）
@@ -283,17 +288,22 @@ func verifyProductionWiring() {
     }
     let code = normalizeWhitespace(container)
 
-    // drawing 的唯一写入漏斗：会话内单赋一次（1）+ 非会话的清空-装入（2）= 3 处。
-    let assignments = code.components(separatedBy: "canvasView.drawing =").count - 1
-    check(assignments == 3,
-          "★ `canvasView.drawing =` 只应出现在 setDrawing 里（实际 \(assignments) 处）："
-          + "任何旁路赋值都会绕过 PencilKit 撤销登记的清空，等于把病灶请回来")
+    // drawing 的写入必须分成两条：**页内只换 strokes**（保留画布当前的版本），
+    // **换页才整份换**（那本来就应该是干净起点）。
+    // ★ 整份赋一份旧快照就是本轮 bug 的根源：PKDrawing 带 uuid/replicaUUID/version
+    //   （CRDT 语义），旧版本里“删除还没发生”，PencilKit 在提交新笔画时按版本对账，
+    //   被撤销的笔画就被当成“尚未删除”而复活。
+    let wholeAssignments = code.components(separatedBy: "canvasView.drawing =").count - 1
+    let strokeAssignments = code.components(separatedBy: "canvasView.drawing.strokes =").count - 1
+    check(wholeAssignments == 1 && strokeAssignments == 1,
+          "★ 整份赋值只允许 1 处（换页），页内写入必须走 strokes（实际整份 \(wholeAssignments) 处 / strokes \(strokeAssignments) 处）")
+    check(code.contains("func setDrawing(_ drawing: PKDrawing) { isProgrammatic = true defer { isProgrammatic = false } canvasView.undoManager?.removeAllActions() canvasView.drawing.strokes = drawing.strokes }"),
+          "★ 页内写入漏斗必须只换 strokes：整份换上一份旧快照会让“删除”回到“尚未删除”的旧版本")
+    check(code.contains("func installDrawing(_ drawing: PKDrawing)")
+          && code.contains("installDrawing(drawing)"),
+          "换页 / 首次装载必须走 installDrawing（唯一允许整份赋值的地方）")
     check(code.contains("canvasView.undoManager?.removeAllActions()"),
-          "★ setDrawing 必须清掉 PencilKit 自己的撤销登记：两份历史并存时，我们追不上它那条链")
-    check(code.contains("canvasView.drawing = PKDrawing()"),
-          "★ setDrawing 必须先把画布清空一次：只赋一次值时，PencilKit 可能仍持有替换前的副本")
-    check(code.contains("if isToolSessionActive {"),
-          "有笔正按在画布上时必须只赋一次值 —— 绝不能把手里的那一笔置于清空状态")
+          "★ 写入漏斗必须清掉 PencilKit 自己的撤销登记：两份历史并存时，我们追不上它那条链")
     check(code.contains("private func apply(_ snapshot: CanvasSnapshot) { discardSelection()"),
           "★ apply() 必须丢弃浮动选区（模型已证明：选区残留是复活的通道之一）")
 
