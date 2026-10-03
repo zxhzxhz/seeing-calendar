@@ -249,8 +249,20 @@ func verifyProductionSourceSync() {
     } else {
         check(false, "找不到 refreshThumbnails(for:) 定义")
     }
-    check(declarationBody(of: "func finishEditing()", in: editor)?.contains("save()") == true,
-          "点击完成必须先落盘，缩略图重算挂在 save() 里")
+    // 点击「完成」必过落盘 → refreshThumbnails，封面/单页两个槽位都要重算。
+    //
+    // 这里钉的是**语义**而不是旧句法：“完成”必须先落盘。落盘入口已统一到
+    // `flushPendingSave()`（撤销/重做也走它，因为撤销是已定型动作、不该走 2s 去抖），
+    // 所以断言分两步：完成必须经过它，而它必须真的写盘（并撤掉去抖中的那次重复写盘）。
+    check(declarationBody(of: "func finishEditing()", in: editor)?.contains("flushPendingSave()") == true,
+          "点击完成必须先落盘（缩略图重算挂在 save() 里）")
+    if let flush = declarationBody(of: "func flushPendingSave()", in: editor) {
+        check(flush.contains("saveTask?.cancel()"),
+              "立即落盘必须先撤掉去抖中的那次写盘（否则 2s 后会重复写一遍）")
+        check(flush.contains("save()"), "立即落盘必须真的写盘")
+    } else {
+        check(false, "找不到 flushPendingSave() 定义")
+    }
 }
 
 // MARK: - 缩略图 store 模拟
