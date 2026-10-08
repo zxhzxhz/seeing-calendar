@@ -24,6 +24,7 @@ final class CompositeCanvasContainerView: UIView {
     var onSelectionChange: ((CanvasSelectionKind) -> Void)?
     var onHistoryChange: ((Bool, Bool) -> Void)?
     var onRequestImageReplace: ((UUID) -> Void)?
+    var onRequestItemEdit: ((UUID, CanvasItemPayload) -> Void)?
 
     var imageViews: [ImageEntityView] = []
 
@@ -605,7 +606,7 @@ final class CompositeCanvasContainerView: UIView {
     // MARK: - 贴图 API
 
     @discardableResult
-    func addImage(_ image: UIImage, fileName: String, offset: CGPoint = .zero) -> UUID {
+    func addImage(_ image: UIImage, fileName: String, offset: CGPoint = .zero, payload: CanvasItemPayload? = nil) -> UUID {
         pushHistory()
         let natural = CGSize(width: max(1, image.size.width * image.scale),
                              height: max(1, image.size.height * image.scale))
@@ -617,12 +618,46 @@ final class CompositeCanvasContainerView: UIView {
                                    worldTransform: transform,
                                    cropRect: CGRect(x: 0, y: 0, width: 1, height: 1),
                                    naturalSize: natural,
-                                   zIndex: nextZ)
+                                   zIndex: nextZ,
+                                   payload: payload)
+        if let payload {
+            CanvasPayloadStore.savePayload(payload, for: fileName)
+        }
         let entity = makeEntity(item)
         place(entity)
         selectImage(id: item.id, additive: false)
         onContentChange?()
         return item.id
+    }
+
+    /// 原地更新可编辑图元（文本/形状等），保持中心点不变
+    func updateImageItem(id: UUID, image: UIImage, payload: CanvasItemPayload) {
+        guard let entity = entity(for: id) else { return }
+        pushHistory()
+        let oldCenter = entity.worldCenter
+        let oldVisibleSize = entity.visibleSize
+        let newNatural = CGSize(width: max(1, image.size.width * image.scale),
+                                height: max(1, image.size.height * image.scale))
+
+        // 写回磁盘文件与元数据
+        let url = AppPaths.assetURL(entity.fileName)
+        if let data = image.pngData() {
+            try? data.write(to: url, options: .atomic)
+        }
+        CanvasPayloadStore.savePayload(payload, for: entity.fileName)
+
+        // 保持中心点位置不变
+        var newTransform = entity.worldTransform
+        let currentCenter = newTransform.applied(to: CGPoint(x: newNatural.width / 2, y: newNatural.height / 2))
+        let dx = oldCenter.x - currentCenter.x
+        let dy = oldCenter.y - currentCenter.y
+        newTransform = newTransform.concatenating(CGAffineTransform(translationX: dx, y: dy))
+
+        entity.worldTransform = newTransform
+        entity.updateContent(image: image, naturalSize: newNatural, payload: payload)
+
+        notifySelection()
+        onContentChange?()
     }
 
     /// 智能入场缩放：不超画布则 1:1 居中；超出则按 Aspect Fit 落入 90% 安全区。

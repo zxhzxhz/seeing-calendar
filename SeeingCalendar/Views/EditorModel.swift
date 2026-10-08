@@ -129,6 +129,14 @@ final class EditorModel {
     var replaceTargetID: UUID?
     var note: String
 
+    // 二次编辑状态
+    var editingItemID: UUID?
+    var editingItemPayload: CanvasItemPayload?
+    var editingTextConfig: TextItemConfig?
+    var isEditingText: Bool = false
+    var editingShapeConfig: ShapeItemConfig?
+    var isEditingShape: Bool = false
+
     /// nil = 导航态（未选中任何工具，只平移缩放）。
     /// 注意：这些属性**不依赖属性观察器**驱动工具下发 ——
     /// 变更请走 `select(tool:)` / `updatePenColor(_:)` 等显式方法（它们会立即下发），
@@ -218,6 +226,19 @@ final class EditorModel {
             guard let self else { return }
             self.replaceTargetID = id
             self.isReplacingImage = true
+        }
+        host.canvas.onRequestItemEdit = { [weak self] id, payload in
+            guard let self else { return }
+            self.editingItemID = id
+            self.editingItemPayload = payload
+            switch payload {
+            case .text(let config):
+                self.editingTextConfig = config
+                self.isEditingText = true
+            case .shape(let config):
+                self.editingShapeConfig = config
+                self.isEditingShape = true
+            }
         }
         host.onRequestDismiss = { [weak self] in
             self?.onRequestDismiss?()
@@ -447,12 +468,22 @@ final class EditorModel {
         }
     }
 
-    // MARK: - 贴图导入
+    // MARK: - 贴图导入与二次编辑
 
-    func importImage(data: Data, fileExtension: String) {
+    func importImage(data: Data, fileExtension: String, payload: CanvasItemPayload? = nil) {
         guard let host = canvasHost, let image = UIImage(data: data) else { return }
         let fileName = repository.storeAsset(data: data, preferredExtension: fileExtension)
-        host.canvas.addImage(image, fileName: fileName)
+        host.canvas.addImage(image, fileName: fileName, payload: payload)
+        markDirty()
+    }
+
+    func updateEditedItem(id: UUID, data: Data, payload: CanvasItemPayload) {
+        guard let host = canvasHost, let image = UIImage(data: data) else { return }
+        host.canvas.updateImageItem(id: id, image: image, payload: payload)
+        editingItemID = nil
+        editingItemPayload = nil
+        isEditingText = false
+        isEditingShape = false
         markDirty()
     }
 

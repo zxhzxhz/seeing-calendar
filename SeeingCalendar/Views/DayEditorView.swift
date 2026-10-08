@@ -118,8 +118,8 @@ struct DayEditorView: View {
             WeatherLocationSheet(date: model.date)
         }
         .sheet(isPresented: $isAddTextPresented) {
-            AddTextSheet { data in
-                model.importImage(data: data, fileExtension: "png")
+            AddTextSheet { data, config in
+                model.importImage(data: data, fileExtension: "png", payload: .text(config))
             }
         }
         .sheet(isPresented: $isAddStickerPresented) {
@@ -133,8 +133,22 @@ struct DayEditorView: View {
             }
         }
         .sheet(isPresented: $isAddShapePresented) {
-            AddShapeSheet { data in
-                model.importImage(data: data, fileExtension: "png")
+            AddShapeSheet { data, config in
+                model.importImage(data: data, fileExtension: "png", payload: .shape(config))
+            }
+        }
+        .sheet(isPresented: editTextBinding(model: model)) {
+            AddTextSheet(initialConfig: model.editingTextConfig) { data, config in
+                if let id = model.editingItemID {
+                    model.updateEditedItem(id: id, data: data, payload: .text(config))
+                }
+            }
+        }
+        .sheet(isPresented: editShapeBinding(model: model)) {
+            AddShapeSheet(initialConfig: model.editingShapeConfig) { data, config in
+                if let id = model.editingItemID {
+                    model.updateEditedItem(id: id, data: data, payload: .shape(config))
+                }
             }
         }
         .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: $isClearConfirmPresented, titleVisibility: .visible) {
@@ -155,6 +169,16 @@ struct DayEditorView: View {
     private func replacementPickerBinding(model: EditorModel) -> Binding<Bool> {
         Binding(get: { model.isReplacingImage },
                 set: { model.isReplacingImage = $0 })
+    }
+
+    private func editTextBinding(model: EditorModel) -> Binding<Bool> {
+        Binding(get: { model.isEditingText },
+                set: { model.isEditingText = $0 })
+    }
+
+    private func editShapeBinding(model: EditorModel) -> Binding<Bool> {
+        Binding(get: { model.isEditingShape },
+                set: { model.isEditingShape = $0 })
     }
 
     @State private var isPhotoPickerRequested = false

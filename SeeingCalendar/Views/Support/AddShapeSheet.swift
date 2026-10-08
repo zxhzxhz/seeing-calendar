@@ -1,16 +1,37 @@
 import SwiftUI
 import UIKit
 
-/// 添加形状弹窗（看齐 iOS 备忘录几何形状工具）
+/// 添加/编辑形状弹窗（看齐 iOS 备忘录几何形状工具）
 struct AddShapeSheet: View {
-    let onCommit: (Data) -> Void
+    let initialConfig: ShapeItemConfig?
+    let onCommit: (Data, ShapeItemConfig) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selectedShape: ShapeKind = .roundedRect
-    @State private var strokeColorHex: String = "#000000"
-    @State private var strokeWidth: CGFloat = 4
-    @State private var fillType: FillKind = .none
-    @State private var fillColorHex: String = "#FFCC00"
+    @State private var selectedShape: ShapeKind
+    @State private var strokeColorHex: String
+    @State private var strokeWidth: CGFloat
+    @State private var fillType: FillKind
+    @State private var fillColorHex: String
+    @State private var opacity: Double
+
+    init(initialConfig: ShapeItemConfig? = nil, onCommit: @escaping (Data, ShapeItemConfig) -> Void) {
+        self.initialConfig = initialConfig
+        self.onCommit = onCommit
+
+        let kind = ShapeKind(rawValue: initialConfig?.shapeKindRaw ?? "") ?? .roundedRect
+        let strokeColor = initialConfig?.strokeColorHex ?? "#000000"
+        let width = initialConfig?.strokeWidth ?? 4
+        let fill = FillKind(rawValue: initialConfig?.fillTypeRaw ?? "") ?? .none
+        let fillColor = initialConfig?.fillColorHex ?? "#FFCC00"
+        let op = initialConfig?.opacity ?? 1.0
+
+        _selectedShape = State(initialValue: kind)
+        _strokeColorHex = State(initialValue: strokeColor)
+        _strokeWidth = State(initialValue: width)
+        _fillType = State(initialValue: fill)
+        _fillColorHex = State(initialValue: fillColor)
+        _opacity = State(initialValue: op)
+    }
 
     enum ShapeKind: String, CaseIterable, Identifiable {
         case roundedRect = "圆角矩形"
@@ -51,17 +72,18 @@ struct AddShapeSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("预览") {
+                Section("效果预览") {
                     HStack {
                         Spacer()
-                        ShapePreviewView(
+                        ShapeRealPreviewView(
                             shape: selectedShape,
                             strokeColor: Color(hex: strokeColorHex),
                             strokeWidth: strokeWidth,
                             fillType: fillType,
-                            fillColor: Color(hex: fillColorHex)
+                            fillColor: Color(hex: fillColorHex),
+                            opacity: opacity
                         )
-                        .frame(width: 140, height: 140)
+                        .frame(width: 160, height: 160)
                         .padding(.vertical, 8)
                         Spacer()
                     }
@@ -98,16 +120,21 @@ struct AddShapeSheet: View {
                 Section("描边样式") {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("线宽")
+                            Text("描边线宽")
                             Spacer()
-                            Text("\(Int(strokeWidth)) pt").foregroundStyle(.secondary)
+                            Text(String(format: "%.1f pt", strokeWidth))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
                         }
-                        Picker("线宽级别", selection: $strokeWidth) {
-                            Text("细 (2pt)").tag(CGFloat(2))
-                            Text("中 (4pt)").tag(CGFloat(4))
-                            Text("粗 (8pt)").tag(CGFloat(8))
+                        Slider(value: $strokeWidth, in: 1...30, step: 0.5)
+
+                        HStack(spacing: 8) {
+                            presetWidthButton(title: "细 2pt", width: 2)
+                            presetWidthButton(title: "中 4pt", width: 4)
+                            presetWidthButton(title: "粗 8pt", width: 8)
+                            presetWidthButton(title: "特粗 16pt", width: 16)
                         }
-                        .pickerStyle(.segmented)
+                        .padding(.top, 2)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -137,21 +164,54 @@ struct AddShapeSheet: View {
                         .padding(.vertical, 4)
                     }
                 }
+
+                Section("整体透明度") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("不透明度")
+                            Spacer()
+                            Text("\(Int(round(opacity * 100)))%")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        Slider(value: $opacity, in: 0.1...1.0, step: 0.05)
+                    }
+                }
             }
-            .navigationTitle("添加形状")
+            .navigationTitle(initialConfig == nil ? "添加形状" : "编辑形状")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("添加到画布") {
+                    Button(initialConfig == nil ? "添加到画布" : "完成更新") {
                         commitShape()
                     }
                     .fontWeight(.semibold)
                 }
             }
         }
+    }
+
+    private func presetWidthButton(title: String, width: CGFloat) -> some View {
+        Button {
+            strokeWidth = width
+        } label: {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(abs(strokeWidth - width) < 0.1 ? Color.accentColor.opacity(0.15) : Color(uiColor: .tertiarySystemFill))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(abs(strokeWidth - width) < 0.1 ? Color.accentColor : Color.clear, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func commitShape() {
@@ -168,9 +228,12 @@ struct AddShapeSheet: View {
 
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { ctx in
-            let inset = strokeWidth / 2 + 8
+            let cg = ctx.cgContext
+            cg.setAlpha(CGFloat(opacity))
+
+            let inset = strokeWidth / 2 + 10
             let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
-            let path = makePath(for: selectedShape, in: rect)
+            let path = Self.makePath(for: selectedShape, in: rect)
             path.lineWidth = strokeWidth
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
@@ -179,17 +242,28 @@ struct AddShapeSheet: View {
                 fill.setFill()
                 path.fill()
             }
-            strokeColor.setStroke()
-            path.stroke()
+            if selectedShape != .line || fillType == .none {
+                strokeColor.setStroke()
+                path.stroke()
+            }
         }
 
+        let config = ShapeItemConfig(
+            shapeKindRaw: selectedShape.rawValue,
+            strokeColorHex: strokeColorHex,
+            strokeWidth: strokeWidth,
+            fillTypeRaw: fillType.rawValue,
+            fillColorHex: fillColorHex,
+            opacity: opacity
+        )
+
         if let data = image.pngData() {
-            onCommit(data)
+            onCommit(data, config)
             dismiss()
         }
     }
 
-    private func makePath(for kind: ShapeKind, in rect: CGRect) -> UIBezierPath {
+    static func makePath(for kind: ShapeKind, in rect: CGRect) -> UIBezierPath {
         switch kind {
         case .roundedRect:
             return UIBezierPath(roundedRect: rect, cornerRadius: 20)
@@ -215,7 +289,7 @@ struct AddShapeSheet: View {
         }
     }
 
-    private func starPath(in rect: CGRect) -> UIBezierPath {
+    private static func starPath(in rect: CGRect) -> UIBezierPath {
         let path = UIBezierPath()
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let points = 5
@@ -234,13 +308,12 @@ struct AddShapeSheet: View {
         return path
     }
 
-    private func bubblePath(in rect: CGRect) -> UIBezierPath {
+    private static func bubblePath(in rect: CGRect) -> UIBezierPath {
         let path = UIBezierPath()
         let bodyRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.78)
         let r: CGFloat = 16
         path.append(UIBezierPath(roundedRect: bodyRect, cornerRadius: r))
 
-        // 对话气泡尖角
         let tail = UIBezierPath()
         tail.move(to: CGPoint(x: rect.minX + 30, y: bodyRect.maxY))
         tail.addLine(to: CGPoint(x: rect.minX + 15, y: rect.maxY))
@@ -250,7 +323,7 @@ struct AddShapeSheet: View {
         return path
     }
 
-    private func arrowPath(in rect: CGRect) -> UIBezierPath {
+    private static func arrowPath(in rect: CGRect) -> UIBezierPath {
         let path = UIBezierPath()
         let midY = rect.midY
         let shaftHeight: CGFloat = rect.height * 0.35
@@ -267,7 +340,7 @@ struct AddShapeSheet: View {
         return path
     }
 
-    private func heartPath(in rect: CGRect) -> UIBezierPath {
+    private static func heartPath(in rect: CGRect) -> UIBezierPath {
         let path = UIBezierPath()
         let side = min(rect.width, rect.height)
         let x = rect.midX - side / 2
@@ -294,7 +367,7 @@ struct AddShapeSheet: View {
         return path
     }
 
-    private func trianglePath(in rect: CGRect) -> UIBezierPath {
+    private static func trianglePath(in rect: CGRect) -> UIBezierPath {
         let path = UIBezierPath()
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
@@ -304,44 +377,41 @@ struct AddShapeSheet: View {
     }
 }
 
-private struct ShapePreviewView: View {
+/// 具有真实矢量渲染与棋盘透明背景的预览视图
+private struct ShapeRealPreviewView: View {
     let shape: AddShapeSheet.ShapeKind
     let strokeColor: Color
     let strokeWidth: CGFloat
     let fillType: AddShapeSheet.FillKind
     let fillColor: Color
+    let opacity: Double
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+            // 清淡微弱的棋盘格底板，直观展示半透明/透明度
+            CheckerboardBackground()
+                .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            shapeRepresentation
-                .padding(14)
-        }
-    }
-
-    @ViewBuilder
-    private var shapeRepresentation: some View {
-        switch shape {
-        case .roundedRect:
             RoundedRectangle(cornerRadius: 12)
-                .fill(fillColorValue)
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(strokeColor, lineWidth: strokeWidth))
-        case .rectangle:
-            Rectangle()
-                .fill(fillColorValue)
-                .overlay(Rectangle().strokeBorder(strokeColor, lineWidth: strokeWidth))
-        case .circle:
-            Circle()
-                .fill(fillColorValue)
-                .overlay(Circle().strokeBorder(strokeColor, lineWidth: strokeWidth))
-        case .star, .bubble, .arrow, .heart, .triangle, .line:
-            // 使用 SF Symbol 自适应渲染预览
-            Image(systemName: shape.icon)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(strokeColor)
+                .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
+
+            GeometryReader { proxy in
+                let scale = min(proxy.size.width, proxy.size.height) / 260
+                let inset = (strokeWidth / 2 + 10) * scale
+                let rect = CGRect(origin: .zero, size: proxy.size).insetBy(dx: inset, dy: inset)
+                let bezier = AddShapeSheet.makePath(for: shape, in: rect)
+                let path = Path(bezier.cgPath)
+
+                ZStack {
+                    if fillType != .none && shape != .line {
+                        path.fill(fillColorValue)
+                    }
+
+                    path.stroke(strokeColor, style: StrokeStyle(lineWidth: strokeWidth * scale, lineCap: .round, lineJoin: .round))
+                }
+                .opacity(opacity)
+            }
+            .padding(14)
         }
     }
 

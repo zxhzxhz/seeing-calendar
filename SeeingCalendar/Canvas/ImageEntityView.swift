@@ -12,13 +12,14 @@ final class ImageEntityView: UIImageView {
     var naturalSize: CGSize
     var zIndex: Int
     private(set) var isLocked: Bool
+    var payload: CanvasItemPayload?
 
     var onSelect: ((ImageEntityView) -> Void)?
     var onBeginMove: ((ImageEntityView) -> Void)?
     var onTransformChanged: ((ImageEntityView) -> Void)?
     var onEndMove: ((ImageEntityView) -> Void)?
 
-    private let sourceImage: UIImage
+    private var sourceImage: UIImage
     private var gestureBase: CGAffineTransform?
     private var gestureStartPoint: CGPoint?
 
@@ -40,6 +41,7 @@ final class ImageEntityView: UIImageView {
         self.naturalSize = item.naturalSize
         self.zIndex = item.zIndex
         self.isLocked = item.isLocked
+        self.payload = item.payload
         self.sourceImage = item.image
         super.init(frame: .zero)
 
@@ -83,7 +85,16 @@ final class ImageEntityView: UIImageView {
                         cropRect: cropRect,
                         naturalSize: naturalSize,
                         zIndex: zIndex,
-                        isLocked: isLocked)
+                        isLocked: isLocked,
+                        payload: payload)
+    }
+
+    func updateContent(image: UIImage, naturalSize: CGSize, payload: CanvasItemPayload?) {
+        self.sourceImage = image
+        self.naturalSize = naturalSize
+        self.payload = payload
+        self.image = image
+        applyWorldTransform()
     }
 
     /// 将模型矩阵投影到 UIKit 视图（center + 线性变换，二者组合等价于 worldTransform）。

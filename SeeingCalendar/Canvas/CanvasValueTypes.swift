@@ -18,6 +18,8 @@ struct CanvasImageItem: Identifiable {
     var zIndex: Int
     /// 锁定的贴图不可被选中/移动/套索圈选。
     var isLocked: Bool = false
+    /// 可编辑图元载荷（文本 / 形状等，nil 表示普通贴图/照片）
+    var payload: CanvasItemPayload? = nil
 
     /// 是否位于手绘笔迹之上。
     var isInFront: Bool { zIndex >= CanvasLayers.frontBase }
@@ -39,6 +41,7 @@ enum CanvasSelectionKind: Equatable {
 }
 
 enum SelectionAction: Equatable {
+    case edit
     case copy
     case cut
     case delete
@@ -55,6 +58,7 @@ enum SelectionAction: Equatable {
 
     var title: String {
         switch self {
+        case .edit: return "编辑"
         case .copy: return "复制"
         case .cut: return "剪切"
         case .delete: return "删除"
@@ -73,6 +77,7 @@ enum SelectionAction: Equatable {
 
     var symbol: String {
         switch self {
+        case .edit: return "slider.horizontal.3"
         case .copy: return "doc.on.doc"
         case .cut: return "scissors"
         case .delete: return "trash"
@@ -103,6 +108,7 @@ extension SelectionAction {
     /// 完整语义（如「置顶（笔迹之上）」）通过按钮的 `accessibilityLabel` 保留。
     func shortTitle(singleImage: Bool) -> String {
         switch self {
+        case .edit: return "编辑"
         case .copy: return singleImage ? "拷贝" : "复制"
         case .cut: return "剪切"
         case .delete: return "删除"

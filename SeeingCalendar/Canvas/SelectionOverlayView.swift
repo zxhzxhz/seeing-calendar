@@ -25,7 +25,7 @@ final class SelectionOverlayView: UIView {
     enum Mode: Equatable {
         case none
         case composite(CGRect)
-        case image(quad: [CGPoint])
+        case image(quad: [CGPoint], canEdit: Bool = false)
         case compositeTransform(CGRect)
         case cropping(quad: [CGPoint])
 
@@ -163,7 +163,7 @@ final class SelectionOverlayView: UIView {
             rect = nil
         case .composite(let box), .compositeTransform(let box):
             rect = box
-        case .image(let quad), .cropping(let quad):
+        case .image(let quad, _), .cropping(let quad):
             let box = CanvasGeometry.boundingBox(quad)
             rect = box.isNull ? nil : box
         }
@@ -268,7 +268,7 @@ final class SelectionOverlayView: UIView {
             marqueeLayer.path = nil
         case .composite(let rect), .compositeTransform(let rect):
             marqueeLayer.path = UIBezierPath(rect: rect).cgPath
-        case .image(let quad), .cropping(let quad):
+        case .image(let quad, _), .cropping(let quad):
             marqueeLayer.path = CanvasGeometry.path(points: quad)
         }
 
@@ -321,7 +321,7 @@ final class SelectionOverlayView: UIView {
             guard quad.count == 4 else { return nil }
             let box = CanvasGeometry.boundingBox(quad)
             return CGPoint(x: box.midX, y: box.midY)
-        case .image(let quad):
+        case .image(let quad, _):
             guard quad.count == 4 else { return nil }
             let box = CanvasGeometry.boundingBox(quad)
             return CGPoint(x: box.midX, y: box.midY)
@@ -367,7 +367,7 @@ final class SelectionOverlayView: UIView {
             return nil
         case .composite(let rect), .compositeTransform(let rect):
             box = rect
-        case .image(let quad), .cropping(let quad):
+        case .image(let quad, _), .cropping(let quad):
             box = CanvasGeometry.boundingBox(quad)
         }
         return box.isNull ? nil : box
@@ -503,7 +503,7 @@ final class SelectionOverlayView: UIView {
                 result[.groupCorner(index + 4)] = edges[index]
             }
             result[.groupRotate] = CGPoint(x: rect.midX, y: rect.minY - 34 * scale)
-        case .image(let quad), .cropping(let quad):
+        case .image(let quad, _), .cropping(let quad):
             guard quad.count == 4 else { return result }
             let edges = [CanvasGeometry.midpoint(quad[0], quad[1]),
                          CanvasGeometry.midpoint(quad[1], quad[2]),
@@ -543,8 +543,12 @@ final class SelectionOverlayView: UIView {
             return [.copy, .cut, .delete, .finishTransform]
         case .cropping:
             return [.finishCrop, .cancelCrop]
-        case .image:
-            return [.copy, .crop, .replace, .bringToFront, .sendToBack, .lock, .delete]
+        case .image(_, let canEdit):
+            if canEdit {
+                return [.edit, .copy, .bringToFront, .sendToBack, .lock, .delete]
+            } else {
+                return [.copy, .crop, .replace, .bringToFront, .sendToBack, .lock, .delete]
+            }
         }
     }
 

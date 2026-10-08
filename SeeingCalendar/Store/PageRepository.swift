@@ -219,6 +219,7 @@ struct PageRepository {
         for record in records {
             let url = AppPaths.assetURL(record.fileName)
             guard let image = UIImage(contentsOfFile: url.path) else { continue }
+            let payload = CanvasPayloadStore.loadPayload(for: record.fileName)
             items.append(CanvasImageItem(id: record.uuid,
                                          fileName: record.fileName,
                                          image: image,
@@ -226,7 +227,8 @@ struct PageRepository {
                                          cropRect: record.cropRectOnImage,
                                          naturalSize: record.naturalSize,
                                          zIndex: record.zIndex,
-                                         isLocked: record.isLocked))
+                                         isLocked: record.isLocked,
+                                         payload: payload))
         }
         return items
     }
@@ -238,6 +240,9 @@ struct PageRepository {
         for record in page.images { existing[record.uuid] = record }
 
         for item in items.sorted(by: { $0.zIndex < $1.zIndex }) {
+            if let payload = item.payload {
+                CanvasPayloadStore.savePayload(payload, for: item.fileName)
+            }
             if let record = existing.removeValue(forKey: item.id) {
                 record.fileName = item.fileName
                 record.setTransform(item.worldTransform)
@@ -260,6 +265,7 @@ struct PageRepository {
         }
 
         for orphan in existing.values {
+            CanvasPayloadStore.deletePayload(for: orphan.fileName)
             context.delete(orphan)
         }
         page.updatedAt = .now

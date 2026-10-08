@@ -134,7 +134,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         case .compositeTransform:
             return .compositeTransform(selectionBounds())
         case .image(let id):
-            return .image(quad: entity(for: id)?.worldQuad ?? [])
+            let ent = entity(for: id)
+            let canEdit = ent?.payload != nil
+            return .image(quad: ent?.worldQuad ?? [], canEdit: canEdit)
         case .cropping(let id):
             return .cropping(quad: entity(for: id)?.worldQuad ?? [])
         }
@@ -533,6 +535,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         // 避免刚建立的选择状态被「点空白取消选中」立刻清掉。
         menuActionGuardUntil = Date().addingTimeInterval(0.35)
         switch action {
+        case .edit:
+            guard let id = selectedImageIDs.first, let entity = entity(for: id), let payload = entity.payload else { return }
+            onRequestItemEdit?(id, payload)
         case .copy:
             copySelectionToClipboard()
         case .cut:
@@ -618,13 +623,22 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
         var newIDs: [UUID] = []
         for item in clipboard.items {
+            let ext = AppPaths.fileExtension(of: URL(fileURLWithPath: item.fileName))
+            let newFileName = AppPaths.newFileName(extension: ext)
+            let srcURL = AppPaths.assetURL(item.fileName)
+            let dstURL = AppPaths.assetURL(newFileName)
+            try? FileManager.default.copyItem(at: srcURL, to: dstURL)
+            if item.payload != nil {
+                CanvasPayloadStore.duplicatePayload(from: item.fileName, to: newFileName)
+            }
             let copy = CanvasImageItem(id: UUID(),
-                                       fileName: item.fileName,
+                                       fileName: newFileName,
                                        image: item.image,
                                        worldTransform: delta.concatenating(item.worldTransform),
                                        cropRect: item.cropRect,
                                        naturalSize: item.naturalSize,
-                                       zIndex: nextZIndex(inFront: item.isInFront))
+                                       zIndex: nextZIndex(inFront: item.isInFront),
+                                       payload: item.payload)
             let entity = makeEntity(copy)
             place(entity)
             newIDs.append(copy.id)
