@@ -43,6 +43,7 @@ enum EraserMode: String, CaseIterable, Identifiable {
 
 enum CanvasTool: String, CaseIterable, Identifiable {
     case pen
+    case monoline
     case marker
     case pencil
     case eraser
@@ -52,6 +53,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .pen: return "钢笔"
+        case .monoline: return "自动铅笔"
         case .marker: return "马克笔"
         case .pencil: return "铅笔"
         case .eraser: return "橡皮"
@@ -61,6 +63,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .pen: return "pencil.tip"
+        case .monoline: return "pencil.line"
         case .marker: return "highlighter"
         case .pencil: return "pencil"
         case .eraser: return "eraser"
@@ -72,8 +75,25 @@ enum CanvasTool: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class EditorModel {
-    /// 墨色出厂默认值（三支笔相同；用户改过之后各自独立记住）。
-    nonisolated static let defaultPenColor = "#1F6FB2"
+    /// 墨色出厂默认值（黑色，看齐 iOS 备忘录首选）。
+    nonisolated static let defaultPenColor = "#000000"
+
+    nonisolated static func defaultColor(for tool: CanvasTool) -> String {
+        switch tool {
+        case .marker: return "#FFCC00"
+        default: return defaultPenColor
+        }
+    }
+
+    nonisolated static func defaultWidth(for tool: CanvasTool) -> CGFloat {
+        switch tool {
+        case .pen: return 5
+        case .monoline: return 3
+        case .marker: return 16
+        case .pencil: return 5
+        case .eraser: return 26
+        }
+    }
 
     let day: DayRecord
     let workspace: Workspace
@@ -149,18 +169,19 @@ final class EditorModel {
     /// 真正的工具下发由 `attach` 里的 `appliedToolSignature = ""` 强制完成一次。
     private func restoreToolSettings() {
         currentInkTool = .pen
-        penColorHex = settings.penColor(for: currentInkTool) ?? penColorHex
-        if let width = settings.penWidth { penWidth = CGFloat(width) }
+        adoptPenSettings(for: currentInkTool)
         if let mode = settings.eraserMode { eraserMode = mode }
         if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
     }
 
-    /// 换上台面指定笔自己的墨色（每支笔独立记忆）。
-    private func adoptPenColor(for tool: CanvasTool) {
+    /// 换上台面指定笔自己的墨色与笔宽（每支笔独立记忆）。
+    private func adoptPenSettings(for tool: CanvasTool) {
         guard tool != .eraser else { return }
         currentInkTool = tool
-        let hex = settings.penColor(for: tool) ?? Self.defaultPenColor
+        let hex = settings.penColor(for: tool) ?? Self.defaultColor(for: tool)
         if penColorHex != hex { penColorHex = hex }
+        let width = settings.penWidth(for: tool) ?? Double(Self.defaultWidth(for: tool))
+        penWidth = CGFloat(width)
     }
 
     var currentPage: DrawingPage? {
@@ -279,6 +300,8 @@ final class EditorModel {
         switch activeTool {
         case .pen:
             host.setTool(PKInkingTool(.pen, color: color, width: penWidth))
+        case .monoline:
+            host.setTool(PKInkingTool(.monoline, color: color, width: penWidth))
         case .marker:
             host.setTool(PKInkingTool(.marker, color: color.withAlphaComponent(0.45), width: penWidth * 2.4))
         case .pencil:
@@ -520,30 +543,31 @@ final class EditorModel {
         canvasHost?.canvas.perform(action)
     }
 
-    /// 笔刷 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
-    /// 同时把目标笔的专属墨色换上台面。
+    /// 笔刷 / 自动铅笔 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
+    /// 同时把目标笔的专属墨色与笔宽换上台面。
     func select(tool: CanvasTool) {
         if isLassoActive {
             isLassoActive = false
         }
-        // 是否"取消选中"看当前工具，换墨色看目标工具 —— 两者语义不同，别混用。
+        // 是否"取消选中"看当前工具，换墨色/笔宽看目标工具 —— 两者语义不同，别混用。
         let next: CanvasTool? = (activeTool == tool) ? nil : tool
-        adoptPenColor(for: tool)
+        adoptPenSettings(for: tool)
         activeTool = next
         applyToolImmediately()
     }
 
     /// 墨色 —— 存入**当前这支笔**的槽位（每支笔独立记忆）。
     func updatePenColor(_ hex: String) {
-        penColorHex = hex
-        settings.setPenColor(hex, for: currentInkTool)
+        guard let normalized = ToolSettingsStore.normalizedHex(hex) else { return }
+        penColorHex = normalized
+        settings.setPenColor(normalized, for: currentInkTool)
         applyToolImmediately()
     }
 
-    /// 笔宽
+    /// 笔宽 —— 存入**当前这支笔**的槽位（每支笔独立记忆）。
     func updatePenWidth(_ width: CGFloat) {
         penWidth = width
-        settings.penWidth = Double(width)
+        settings.setPenWidth(Double(width), for: currentInkTool)
         applyToolImmediately()
     }
 

@@ -26,6 +26,10 @@ struct ToolSettingsStore {
         static func penColor(_ tool: CanvasTool) -> String {
             "editorTool.penColor.\(tool.rawValue)"
         }
+
+        static func penWidth(_ tool: CanvasTool) -> String {
+            "editorTool.penWidth.\(tool.rawValue)"
+        }
     }
 
     // MARK: - 墨色（每支笔独立）
@@ -42,10 +46,21 @@ struct ToolSettingsStore {
         defaults.set(normalized, forKey: Key.penColor(tool))
     }
 
-    // MARK: - 笔宽
+    // MARK: - 笔宽（每支笔独立存储与读取）
 
     /// 只接受落在 UI 滑块量程内的值 —— 越界值（旧版本残留 / 手工改写）一律当作未存过。
     let penWidthRange: ClosedRange<Double> = 1...28
+
+    func penWidth(for tool: CanvasTool) -> Double? {
+        guard tool != .eraser else { return nil }
+        return clampedDouble(forKey: Key.penWidth(tool), in: penWidthRange)
+            ?? clampedDouble(forKey: Key.penWidth, in: penWidthRange)
+    }
+
+    func setPenWidth(_ width: Double, for tool: CanvasTool) {
+        guard tool != .eraser, penWidthRange.contains(width) else { return }
+        defaults.set(width, forKey: Key.penWidth(tool))
+    }
 
     var penWidth: Double? {
         get { clampedDouble(forKey: Key.penWidth, in: penWidthRange) }

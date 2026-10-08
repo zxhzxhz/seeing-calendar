@@ -25,6 +25,10 @@ struct DayEditorView: View {
     @State private var isColorPickerPresented = false
     @State private var isPageManagerPresented = false
     @State private var isWeatherSheetPresented = false
+    @State private var isAddTextPresented = false
+    @State private var isAddStickerPresented = false
+    @State private var isAddSignaturePresented = false
+    @State private var isAddShapePresented = false
     /// 顶部标签行 / 页条下拉返回的进行中标记。
     @State private var isPullDownDismissing = false
 
@@ -112,6 +116,26 @@ struct DayEditorView: View {
         }
         .sheet(isPresented: $isWeatherSheetPresented) {
             WeatherLocationSheet(date: model.date)
+        }
+        .sheet(isPresented: $isAddTextPresented) {
+            AddTextSheet { data in
+                model.importImage(data: data, fileExtension: "png")
+            }
+        }
+        .sheet(isPresented: $isAddStickerPresented) {
+            AddStickerSheet { data in
+                model.importImage(data: data, fileExtension: "png")
+            }
+        }
+        .sheet(isPresented: $isAddSignaturePresented) {
+            AddSignatureSheet { data in
+                model.importImage(data: data, fileExtension: "png")
+            }
+        }
+        .sheet(isPresented: $isAddShapePresented) {
+            AddShapeSheet { data in
+                model.importImage(data: data, fileExtension: "png")
+            }
         }
         .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: $isClearConfirmPresented, titleVisibility: .visible) {
             Button("清空当前页", role: .destructive) { model.clearPage() }
@@ -314,6 +338,49 @@ struct DayEditorView: View {
             }
             .accessibilityLabel("手指书写开关")
 
+            Menu {
+                Button {
+                    isAddTextPresented = true
+                } label: {
+                    Label("添加文本", systemImage: "character.textbox")
+                }
+
+                Button {
+                    isAddStickerPresented = true
+                } label: {
+                    Label("添加贴纸", systemImage: "face.smiling")
+                }
+
+                Button {
+                    isAddSignaturePresented = true
+                } label: {
+                    Label("添加签名", systemImage: "signature")
+                }
+
+                Button {
+                    isAddShapePresented = true
+                } label: {
+                    Label("添加形状", systemImage: "square.on.circle")
+                }
+
+                Divider()
+
+                Button {
+                    isPhotoPickerRequested = true
+                } label: {
+                    Label("添加照片", systemImage: "photo")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(uiColor: .tertiarySystemFill))
+                    )
+            }
+            .accessibilityLabel("添加元素（文本、贴纸、签名、形状、图片）")
+
             Spacer(minLength: 0)
 
             if model.isLassoActive {
@@ -422,27 +489,24 @@ struct DayEditorView: View {
     }
 
     private func inkSettings(model: EditorModel) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("墨色").font(.headline)
-            HStack(spacing: 10) {
-                ForEach(SubscriptionPalette.colors, id: \.self) { hex in
-                    Button {
-                        model.updatePenColor(hex)
-                    } label: {
-                        Circle()
-                            .fill(Color(hex: hex))
-                            .frame(width: 24, height: 24)
-                            .overlay(
-                                Circle().strokeBorder(model.penColorHex == hex ? Color.primary : .clear, lineWidth: 2)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
+            PencilColorPaletteView(selectedHex: model.penColorHex) { hex in
+                model.updatePenColor(hex)
             }
-            Text("笔宽 \(Int(model.penWidth))")
-                .font(.subheadline)
+            .padding(.vertical, 2)
+
+            Divider()
+
+            HStack {
+                Text("笔宽").font(.subheadline)
+                Spacer()
+                Text("\(Int(model.penWidth)) pt")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
             Slider(value: Binding(get: { model.penWidth }, set: { model.updatePenWidth($0) }), in: 1...28, step: 1)
-                .frame(width: 240)
+                .frame(width: 250)
         }
         .padding(16)
     }
