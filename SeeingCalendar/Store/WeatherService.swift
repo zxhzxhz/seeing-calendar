@@ -308,7 +308,7 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
     // MARK: - WMO 代码转换
 
-    static func wmoDescription(for code: Int) -> String {
+    nonisolated static func wmoDescription(for code: Int) -> String {
         switch code {
         case 0: return "晴"
         case 1: return "大部晴朗"
