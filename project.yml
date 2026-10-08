@@ -10,7 +10,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "1.0.26"
+    MARKETING_VERSION: "1.0.27"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
@@ -68,6 +68,7 @@ targets:
         NSPhotoLibraryUsageDescription: 从相册导入照片或插画，贴入当日画布进行排版与绘制。
         NSPhotoLibraryAddUsageDescription: 将当日手绘作品导出到相册。
         NSLocalNetworkUsageDescription: 订阅局域网内的 ICS 日历源。
+        NSLocationWhenInUseUsageDescription: 获取当前位置以在日历与画布中展示当日准确天气信息。
         CFBundleDocumentTypes:
           - CFBundleTypeName: 看见Calendar 归档
             CFBundleTypeRole: Editor

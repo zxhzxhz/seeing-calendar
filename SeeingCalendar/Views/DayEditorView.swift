@@ -15,7 +15,7 @@ struct DayEditorView: View {
     let onFingerDrawingChanged: (Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var model: EditorModel?
+    @State private var model: EditorModel
     @State private var photoItem: PhotosPickerItem?
     @State private var replacementItem: PhotosPickerItem?
     @State private var isCameraPresented = false
@@ -24,27 +24,40 @@ struct DayEditorView: View {
     @State private var isDeletePageConfirmPresented = false
     @State private var isColorPickerPresented = false
     @State private var isPageManagerPresented = false
+    @State private var isWeatherSheetPresented = false
     /// 顶部标签行 / 页条下拉返回的进行中标记。
     @State private var isPullDownDismissing = false
 
+    init(day: DayRecord,
+         workspace: Workspace,
+         context: ModelContext,
+         initialPageIndex: Int,
+         isFingerDrawingEnabled: Bool,
+         onFingerDrawingChanged: @escaping (Bool) -> Void) {
+        self.day = day
+        self.workspace = workspace
+        self.context = context
+        self.initialPageIndex = initialPageIndex
+        self.isFingerDrawingEnabled = isFingerDrawingEnabled
+        self.onFingerDrawingChanged = onFingerDrawingChanged
+
+        let created = EditorModel(day: day, workspace: workspace, context: context)
+        created.setInitialPage(initialPageIndex)
+        created.isFingerDrawingEnabled = isFingerDrawingEnabled
+        self._model = State(initialValue: created)
+    }
+
     var body: some View {
-        Group {
-            if let model {
-                content(model: model)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        content(model: model)
+            .onAppear {
+                model.onRequestDismiss = { dismiss() }
+                model.onRequestToggleColorPicker = {
+                    isColorPickerPresented.toggle()
+                }
             }
-        }
-        .task {
-            if model == nil {
-                let created = EditorModel(day: day, workspace: workspace, context: context)
-                created.setInitialPage(initialPageIndex)
-                created.isFingerDrawingEnabled = isFingerDrawingEnabled
-                // 画纸留白处下拉 → 返回主页面（手势实现见 CanvasHostView）。
-                created.onRequestDismiss = { dismiss() }
-                model = created
+            .task {
+                await WeatherService.shared.fetchWeather(for: model.date)
             }
-        }
     }
 
     // MARK: - 主体
@@ -96,6 +109,9 @@ struct DayEditorView: View {
         }
         .sheet(isPresented: $isPageManagerPresented) {
             PageManagerSheet(model: model)
+        }
+        .sheet(isPresented: $isWeatherSheetPresented) {
+            WeatherLocationSheet(date: model.date)
         }
         .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: $isClearConfirmPresented, titleVisibility: .visible) {
             Button("清空当前页", role: .destructive) { model.clearPage() }
@@ -238,9 +254,6 @@ struct DayEditorView: View {
             ForEach(CanvasTool.allCases) { tool in
                 Button {
                     model.select(tool: tool)
-                    if tool == .eraser, model.activeTool == .eraser {
-                        isColorPickerPresented = true   // 橡皮：直接展开模式与大小设置
-                    }
                 } label: {
                     Image(systemName: tool.symbol)
                         .font(.system(size: 16))
@@ -455,12 +468,23 @@ struct DayEditorView: View {
     @ToolbarContentBuilder
     private func toolbarContent(model: EditorModel) -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            Text(model.title)
-                .font(.system(size: 16, weight: .semibold))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Button {
+                isWeatherSheetPresented = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text(model.titleWithWeather)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
                 .contentShape(Rectangle())
-                .gesture(pullDownToDismiss)
+            }
+            .buttonStyle(.plain)
+            .gesture(pullDownToDismiss)
+            .accessibilityLabel("日期与天气信息，点击可管理城市与定位")
         }
 
         ToolbarItem(placement: .topBarLeading) {
@@ -648,6 +672,101 @@ struct CameraPicker: UIViewControllerRepresentable {
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             dismiss()
+        }
+    }
+}
+
+// MARK: - 天气与城市选择面板
+
+struct WeatherLocationSheet: View {
+    let date: Date
+    @Environment(\.dismiss) private var dismiss
+    @State private var weatherService = WeatherService.shared
+    @State private var searchText = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("当日天气") {
+                    let info = weatherService.weather(for: date)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(weatherService.currentLocation.displayName)
+                                .font(.headline)
+                            if let info {
+                                Text("\(info.conditionDescription) · \(Int(info.tempMin.rounded()))℃ ~ \(Int(info.tempMax.rounded()))℃")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text(weatherService.isFetching ? "正在拉取天气..." : "暂无缓存天气")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            Task { await weatherService.fetchWeather(for: date) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(weatherService.isFetching)
+                    }
+                }
+
+                Section("位置获取方式") {
+                    Toggle("自动定位 (系统 GPS)", isOn: $weatherService.useAutoLocation)
+                }
+
+                Section("搜索并手动选取城市") {
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("输入城市名称（如北京、上海、广州）", text: $searchText)
+                            .onSubmit {
+                                Task { await weatherService.searchCities(query: searchText) }
+                            }
+                        if !searchText.isEmpty {
+                            Button {
+                                searchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if weatherService.isSearching {
+                        HStack {
+                            Spacer()
+                            ProgressView("正在搜索...")
+                            Spacer()
+                        }
+                    } else if !weatherService.searchResults.isEmpty {
+                        ForEach(weatherService.searchResults) { loc in
+                            Button {
+                                weatherService.selectLocation(loc)
+                                Task { await weatherService.fetchWeather(for: date) }
+                            } label: {
+                                HStack {
+                                    Text(loc.displayName)
+                                    Spacer()
+                                    if weatherService.currentLocation.id == loc.id {
+                                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("天气与地点设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .task {
+                await weatherService.fetchWeather(for: date)
+            }
         }
     }
 }

@@ -32,14 +32,30 @@ struct DayCellPalette {
     /// 日号胶囊底
     let numberPlate: Color
 
-    /// 放假 / 周末：暖色（暖米底 + 焦橙数字）。
+    /// 放假 / 周末：暖色（支持深色模式动态自适应，避免暗色背景下亮白斑驳刺眼）。
     static let warm = DayCellPalette(
-        background: Color(red: 0.988, green: 0.937, blue: 0.906),
-        number: Color(red: 0.776, green: 0.290, blue: 0.125),
-        border: Color(red: 0.847, green: 0.549, blue: 0.412).opacity(0.38),
+        background: Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.24, green: 0.14, blue: 0.10, alpha: 1.0)
+                : UIColor(red: 0.988, green: 0.937, blue: 0.906, alpha: 1.0)
+        }),
+        number: Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.98, green: 0.55, blue: 0.38, alpha: 1.0)
+                : UIColor(red: 0.776, green: 0.290, blue: 0.125, alpha: 1.0)
+        }),
+        border: Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.60, green: 0.35, blue: 0.25, alpha: 0.38)
+                : UIColor(red: 0.847, green: 0.549, blue: 0.412, alpha: 0.38)
+        }),
         badgeBackground: Color(red: 0.855, green: 0.357, blue: 0.180),
         badgeForeground: .white,
-        numberPlate: Color(red: 1.0, green: 0.988, blue: 0.973).opacity(0.88)
+        numberPlate: Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.30, green: 0.18, blue: 0.13, alpha: 0.88)
+                : UIColor(red: 1.0, green: 0.988, blue: 0.973, alpha: 0.88)
+        })
     )
 
     /// 普通工作日 / 调休补班：中性（冷灰底 + 墨色数字）。

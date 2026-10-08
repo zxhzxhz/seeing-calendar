@@ -131,7 +131,8 @@ final class CalendarEventStore {
         events = collected
         lastRefresh = now
         lastError = failures.isEmpty ? nil : failures.joined(separator: "；")
-        rebuildIndex()
+        let newIndex = await Task.detached { CalendarEventStore.buildIndex(from: collected) }.value
+        dayIndex = newIndex
         persistCache()
     }
 
@@ -143,6 +144,10 @@ final class CalendarEventStore {
     }
 
     private func rebuildIndex() {
+        dayIndex = Self.buildIndex(from: events)
+    }
+
+    nonisolated static func buildIndex(from events: [CalendarEvent]) -> [String: [CalendarEvent]] {
         var index: [String: [CalendarEvent]] = [:]
         // 假期事件用 CST 取日（与 BundledHolidayProvider 的着色日表同源），
         // 否则西部时区设备上「格子里染成补班的日期」与「抽屉里列出的日期」会差一天。
@@ -165,7 +170,7 @@ final class CalendarEventStore {
         for key in index.keys {
             index[key]?.sort { $0.start < $1.start }
         }
-        dayIndex = index
+        return index
     }
 
     // MARK: - 网络

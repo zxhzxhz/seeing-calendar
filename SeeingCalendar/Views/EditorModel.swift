@@ -103,6 +103,8 @@ final class EditorModel {
     var lockedImageCount = 0
     /// 下拉返回主页面（画纸留白处 / 顶部标签行触发）。
     var onRequestDismiss: (() -> Void)?
+    /// Pencil 硬件交互请求切换/展开调色盘。
+    var onRequestToggleColorPicker: (() -> Void)?
     var isReplacingImage = false
     var replaceTargetID: UUID?
     var note: String
@@ -172,6 +174,9 @@ final class EditorModel {
 
     var title: String { CalendarUtils.dayTitle(date) }
 
+    /// 包含当日天气的标题：{日期} 天气{晴/多云/暴雨等} 气温{min}~{max}摄氏度
+    var titleWithWeather: String { WeatherService.shared.fullTitle(for: date) }
+
     // MARK: - 桥接
 
     func attach(host: CanvasHostView) {
@@ -213,6 +218,17 @@ final class EditorModel {
                     self.isCanvasExpanded = expanded
                 }
             }
+        }
+        host.onPencilSwitchTool = { [weak self] in
+            guard let self else { return }
+            if self.activeTool == .eraser {
+                self.select(tool: self.currentInkTool)
+            } else {
+                self.select(tool: .eraser)
+            }
+        }
+        host.onPencilShowPalette = { [weak self] in
+            self?.onRequestToggleColorPicker?()
         }
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         host.canvas.isLassoActive = isLassoActive

@@ -102,7 +102,9 @@ enum CalendarUtils {
         let first = startOfMonth(date)
         let weekday = calendar.component(.weekday, from: first)
         let leading = (weekday - calendar.firstWeekday + 7) % 7
-        let start = addDays(-leading, to: first)
+        // 锚定在中午 12:00 加减天数，防御夏令时（DST）切换导致的跨天时间漂移
+        let noonFirst = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: first) ?? first
+        let start = addDays(-leading, to: noonFirst)
         return (0..<42).map { addDays($0, to: start) }
     }
 

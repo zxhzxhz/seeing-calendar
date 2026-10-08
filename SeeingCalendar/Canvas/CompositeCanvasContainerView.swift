@@ -57,11 +57,15 @@ final class CompositeCanvasContainerView: UIView {
     var groupBaseTransforms: [UUID: CGAffineTransform] = [:]
     var groupAccumulatedDelta: CGAffineTransform?
 
+    /// 绘制策略或手指书写开关变化回调（供宿主视图同步平移手势的最低触控指树限制）。
+    var onDrawingPolicyChanged: (() -> Void)?
+
     /// 是否允许在画布上落笔（取消全部工具后即为「导航态」：只平移缩放）。
     var isDrawingEnabled: Bool = true {
         didSet {
             guard oldValue != isDrawingEnabled else { return }
             updateInteractionPolicy()
+            onDrawingPolicyChanged?()
         }
     }
 
@@ -69,6 +73,7 @@ final class CompositeCanvasContainerView: UIView {
         didSet {
             guard oldValue != isFingerDrawingEnabled else { return }
             updateDrawingPolicy()
+            onDrawingPolicyChanged?()
         }
     }
 

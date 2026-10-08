@@ -32,6 +32,39 @@ struct MonthGridView: View, Equatable {
     let zoomNamespace: Namespace.ID
     let onSelect: (Date) -> Void
     let onOpen: (Date) -> Void
+    /// 预计算的当月 42 个网格日期。固化为存储属性，彻底消除单次渲染评估 42 次重复算日的 O(N^2) 风暴。
+    let gridDates: [Date]
+
+    init(month: Date,
+         selectedDate: Date,
+         records: [String: DayRecord],
+         eventsByDay: [String: [CalendarEvent]],
+         holidays: [String: WorkRestStatus],
+         holidayNames: [String: String],
+         contentToken: Int,
+         thumbnailVersion: Int,
+         availableSize: CGSize,
+         pulseKey: String?,
+         pulseID: Int,
+         zoomNamespace: Namespace.ID,
+         onSelect: @escaping (Date) -> Void,
+         onOpen: @escaping (Date) -> Void) {
+        self.month = month
+        self.selectedDate = selectedDate
+        self.records = records
+        self.eventsByDay = eventsByDay
+        self.holidays = holidays
+        self.holidayNames = holidayNames
+        self.contentToken = contentToken
+        self.thumbnailVersion = thumbnailVersion
+        self.availableSize = availableSize
+        self.pulseKey = pulseKey
+        self.pulseID = pulseID
+        self.zoomNamespace = zoomNamespace
+        self.onSelect = onSelect
+        self.onOpen = onOpen
+        self.gridDates = CalendarUtils.gridDates(forMonthContaining: month)
+    }
 
     /// O(1) 等价判定。
     ///
@@ -67,8 +100,6 @@ struct MonthGridView: View, Equatable {
 
     private let spacing = MonthGridView.spacing
     private let weekdayHeaderHeight = MonthGridView.weekdayHeaderHeight
-
-    private var gridDates: [Date] { CalendarUtils.gridDates(forMonthContaining: month) }
 
     /// 单格 1:1 边长：取「横向可用宽」与「纵向可用高」的较小者。
     static func cellWidth(availableSize: CGSize) -> CGFloat {

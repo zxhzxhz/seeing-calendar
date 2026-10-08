@@ -12,6 +12,7 @@ struct EditorRequest: Identifiable {
 /// 主界面：顶栏导航 + 1:1 月历矩阵（左右滑动翻月）；竖屏附加动态扩展区。
 struct RootView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @Query(sort: \Workspace.sortIndex) private var workspaces: [Workspace]
     @Query private var allDays: [DayRecord]
@@ -66,7 +67,7 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isPortrait = DeviceLayout.isPortrait
+            let isPortrait = DeviceLayout.isPortraitLayout(horizontalSizeClass: horizontalSizeClass, size: proxy.size)
             VStack(spacing: 0) {
                 headerBar(containerWidth: proxy.size.width)
                 Divider()

@@ -3,7 +3,7 @@ import UIKit
 
 /// 画布宿主：外层统一缩放/平移（两层共享同一世界坐标系，几何永不错位）。
 @MainActor
-final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     let scrollView = UIScrollView()
     let canvas: CompositeCanvasContainerView
 
@@ -11,9 +11,11 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     var onZoomChange: ((CGFloat, CGFloat) -> Void)?
 
     /// 在「画纸之外」（缩小时暴露的四周留白）向下拖动释放时回调，用于返回主页面。
-    /// 系统交互式消失手势已在编辑器层永久禁用（它无法按区域开关），
-    /// 因此这里自实现区域化下拉：只有留白处起手才接管，画纸内绝不抢手势。
     var onRequestDismiss: (() -> Void)?
+
+    /// Apple Pencil 硬件轻点触发工具切换回调
+    var onPencilSwitchTool: (() -> Void)?
+    var onPencilShowPalette: (() -> Void)?
 
     private var pullDownEngaged = false
 
@@ -73,13 +75,72 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         scrollView.decelerationRate = .fast
         scrollView.delaysContentTouches = false
         scrollView.contentInsetAdjustmentBehavior = .never
-        scrollView.panGestureRecognizer.minimumNumberOfTouches = 2
+        // 关键：限制外层平移只认手指触摸，绝不截取 Apple Pencil 触控！
+        scrollView.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        updatePanTouchesPolicy()
         addSubview(scrollView)
 
         canvas.frame = CGRect(origin: .zero, size: CompositeCanvasContainerView.canvasSize)
+        canvas.onDrawingPolicyChanged = { [weak self] in
+            self?.updatePanTouchesPolicy()
+        }
         scrollView.addSubview(canvas)
 
         addGestureRecognizer(pullDown)
+
+        // 1. Apple Pencil 硬件交互（双击 / 调色盘）
+        let pencilInteraction = UIPencilInteraction()
+        pencilInteraction.delegate = self
+        addInteraction(pencilInteraction)
+
+        // 2. 双指轻点撤销（Two-finger Tap Undo）
+        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap(_:)))
+        twoFingerTap.numberOfTouchesRequired = 2
+        twoFingerTap.numberOfTapsRequired = 1
+        twoFingerTap.cancelsTouchesInView = false
+        twoFingerTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        addGestureRecognizer(twoFingerTap)
+
+        // 3. 三指轻点重做（Three-finger Tap Redo）
+        let threeFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleThreeFingerTap(_:)))
+        threeFingerTap.numberOfTouchesRequired = 3
+        threeFingerTap.numberOfTapsRequired = 1
+        threeFingerTap.cancelsTouchesInView = false
+        threeFingerTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        addGestureRecognizer(threeFingerTap)
+    }
+
+    /// 触控策略同步：当关闭手指书写时，手指负责平移画布（单指即可平移，双指缩放）；
+    /// 只有在开启手指书写且处于绘图态时，才需要双指平移以防误触。
+    func updatePanTouchesPolicy() {
+        let requiresTwoFingers = canvas.isFingerDrawingEnabled && canvas.isDrawingEnabled
+        scrollView.panGestureRecognizer.minimumNumberOfTouches = requiresTwoFingers ? 2 : 1
+    }
+
+    @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, isInsidePaper(gesture.location(in: self)) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        canvas.undo()
+    }
+
+    @objc private func handleThreeFingerTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, isInsidePaper(gesture.location(in: self)) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        canvas.redo()
+    }
+
+    // MARK: - UIPencilInteractionDelegate
+    nonisolated func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        Task { @MainActor in
+            switch UIPencilInteraction.preferredTapAction {
+            case .switchEraser, .switchPrevious:
+                self.onPencilSwitchTool?()
+            case .showColorPalette:
+                self.onPencilShowPalette?()
+            default:
+                self.onPencilSwitchTool?()
+            }
+        }
     }
 
     override func layoutSubviews() {
@@ -194,7 +255,7 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
 
     /// 导航态（取消全部工具 / 笔画）：禁止落笔，单指即可平移，双指缩放。
     func setNavigationMode(_ enabled: Bool) {
-        scrollView.panGestureRecognizer.minimumNumberOfTouches = enabled ? 1 : 2
         canvas.isDrawingEnabled = !enabled
+        updatePanTouchesPolicy()
     }
 }
