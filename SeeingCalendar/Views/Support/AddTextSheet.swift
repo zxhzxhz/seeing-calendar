@@ -67,7 +67,7 @@ struct AddTextSheet: View {
                 return base
             }
 
-            var traits: UIFontDescriptorSymbolicTraits = []
+            var traits: UIFontDescriptor.SymbolicTraits = []
             if isBold { traits.insert(.traitBold) }
             if isItalic { traits.insert(.traitItalic) }
 
@@ -281,16 +281,19 @@ struct AddTextSheet: View {
         }
     }
 
+    private func formattedToggleTitle(_ title: String, font: Font?, underline: Bool, strikethrough: Bool) -> some View {
+        Text(title)
+            .underline(underline)
+            .strikethrough(strikethrough)
+            .font(font ?? .system(size: 15))
+    }
+
     private func styleToggle(title: String, subtitle: String, isOn: Binding<Bool>, font: Font? = nil, underline: Bool = false, strikethrough: Bool = false) -> some View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
             VStack(spacing: 2) {
-                var textElement = Text(title)
-                if underline { textElement = textElement.underline() }
-                if strikethrough { textElement = textElement.strikethrough() }
-                textElement
-                    .font(font ?? .system(size: 15))
+                formattedToggleTitle(title, font: font, underline: underline, strikethrough: strikethrough)
                 Text(subtitle)
                     .font(.system(size: 10))
             }
