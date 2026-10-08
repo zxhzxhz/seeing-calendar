@@ -95,6 +95,25 @@ final class EditorModel {
         }
     }
 
+    nonisolated static func widthPresets(for tool: CanvasTool) -> [CGFloat] {
+        switch tool {
+        case .monoline:
+            return [1, 2, 3, 5, 8]
+        case .pen:
+            return [1, 3, 6, 12, 20]
+        case .pencil:
+            return [2, 5, 9, 16, 24]
+        case .marker:
+            return [6, 12, 18, 24, 28]
+        case .eraser:
+            return [12, 24, 48, 80]
+        }
+    }
+
+    var currentWidthPresets: [CGFloat] {
+        Self.widthPresets(for: activeTool ?? .pen)
+    }
+
     let day: DayRecord
     let workspace: Workspace
     let repository: PageRepository
@@ -128,6 +147,7 @@ final class EditorModel {
     var isReplacingImage = false
     var replaceTargetID: UUID?
     var note: String
+    var toastMessage: String?
 
     // 二次编辑状态
     var editingItemID: UUID?
@@ -149,6 +169,8 @@ final class EditorModel {
     /// 这样"橡皮 → 取色"仍然改的是上一支笔，语义上更符合直觉。
     private(set) var currentInkTool: CanvasTool = .pen
     var penWidth: CGFloat = 5
+    /// 墨水透明度（0.1...1.0，每支笔独立记忆）
+    var penOpacity: Double = 1.0
     var eraserMode: EraserMode = .wholeStroke
     /// 橡皮有效范围直径（画布世界坐标）；同时决定 PKEraserTool.width 与指示圈直径。
     var eraserWidth: CGFloat = 26
@@ -190,6 +212,8 @@ final class EditorModel {
         if penColorHex != hex { penColorHex = hex }
         let width = settings.penWidth(for: tool) ?? Double(Self.defaultWidth(for: tool))
         penWidth = CGFloat(width)
+        let opacity = settings.penOpacity(for: tool) ?? 1.0
+        penOpacity = opacity
     }
 
     var currentPage: DrawingPage? {
@@ -240,6 +264,9 @@ final class EditorModel {
                 self.isEditingShape = true
             }
         }
+        host.canvas.onSaveItemAsSticker = { [weak self] entity in
+            self?.saveEntityAsCustomSticker(entity)
+        }
         host.onRequestDismiss = { [weak self] in
             self?.onRequestDismiss?()
         }
@@ -282,10 +309,10 @@ final class EditorModel {
         }
     }
 
-    /// 期望状态指纹：工具类型 + 颜色 + 笔宽 + 橡皮模式/大小 + 套索开关。
+    /// 期望状态指纹：工具类型 + 颜色 + 透明度 + 笔宽 + 橡皮模式/大小 + 套索开关。
     private var toolSignature: String {
         let tool = activeTool?.rawValue ?? "none"
-        return "\(tool)|\(penColorHex)|\(penWidth)|\(eraserMode.rawValue)|\(eraserWidth)|\(isLassoActive)"
+        return "\(tool)|\(penColorHex)|\(penOpacity)|\(penWidth)|\(eraserMode.rawValue)|\(eraserWidth)|\(isLassoActive)"
     }
 
     func syncUIKitState(of host: CanvasHostView?) {
@@ -309,7 +336,8 @@ final class EditorModel {
     }
 
     private func applyTool(on host: CanvasHostView) {
-        let color = UIColor(hex: penColorHex) ?? .label
+        let baseColor = UIColor(hex: penColorHex) ?? .label
+        let color = baseColor.withAlphaComponent(CGFloat(penOpacity))
         guard let activeTool else {
             host.setNavigationMode(true)
             host.canvas.isEraserActive = false
@@ -324,7 +352,7 @@ final class EditorModel {
         case .monoline:
             host.setTool(PKInkingTool(.monoline, color: color, width: penWidth))
         case .marker:
-            host.setTool(PKInkingTool(.marker, color: color.withAlphaComponent(0.45), width: penWidth * 2.4))
+            host.setTool(PKInkingTool(.marker, color: color.withAlphaComponent(CGFloat(penOpacity * 0.45)), width: penWidth * 2.4))
         case .pencil:
             host.setTool(PKInkingTool(.pencil, color: color, width: penWidth * 0.9))
         case .eraser:
@@ -487,6 +515,14 @@ final class EditorModel {
         markDirty()
     }
 
+    func saveEntityAsCustomSticker(_ entity: ImageEntityView) {
+        guard let stickerImg = entity.renderStickerImage(),
+              let data = stickerImg.pngData() else { return }
+        let fp = entity.stickerFingerprint
+        _ = CustomStickerStore.shared.addSticker(imageData: data, fingerprint: fp)
+        toastMessage = "已保存为贴纸"
+    }
+
     func importImage(fromURL url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -599,6 +635,13 @@ final class EditorModel {
     func updatePenWidth(_ width: CGFloat) {
         penWidth = width
         settings.setPenWidth(Double(width), for: currentInkTool)
+        applyToolImmediately()
+    }
+
+    /// 墨水透明度 —— 存入**当前这支笔**的槽位（每支笔独立记忆，0.05...1.0）。
+    func updatePenOpacity(_ opacity: Double) {
+        penOpacity = opacity
+        settings.setPenOpacity(opacity, for: currentInkTool)
         applyToolImmediately()
     }
 

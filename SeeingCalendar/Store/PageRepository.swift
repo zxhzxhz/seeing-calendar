@@ -219,7 +219,13 @@ struct PageRepository {
         for record in records {
             let url = AppPaths.assetURL(record.fileName)
             guard let image = UIImage(contentsOfFile: url.path) else { continue }
-            let payload = CanvasPayloadStore.loadPayload(for: record.fileName)
+            var payload: CanvasItemPayload? = nil
+            if let json = record.payloadJSON, let data = json.data(using: .utf8) {
+                payload = try? JSONDecoder().decode(CanvasItemPayload.self, from: data)
+            }
+            if payload == nil {
+                payload = CanvasPayloadStore.loadPayload(for: record.fileName)
+            }
             items.append(CanvasImageItem(id: record.uuid,
                                          fileName: record.fileName,
                                          image: image,
@@ -240,6 +246,11 @@ struct PageRepository {
         for record in page.images { existing[record.uuid] = record }
 
         for item in items.sorted(by: { $0.zIndex < $1.zIndex }) {
+            let payloadJSON: String? = {
+                guard let payload = item.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return String(data: data, encoding: .utf8)
+            }()
             if let payload = item.payload {
                 CanvasPayloadStore.savePayload(payload, for: item.fileName)
             }
@@ -251,6 +262,7 @@ struct PageRepository {
                 record.naturalHeight = Double(item.naturalSize.height)
                 record.zIndex = item.zIndex
                 record.isLocked = item.isLocked
+                record.payloadJSON = payloadJSON
             } else {
                 let record = ImageRecord(uuid: item.id,
                                          fileName: item.fileName,
@@ -258,7 +270,8 @@ struct PageRepository {
                                          cropRect: item.cropRect,
                                          naturalSize: item.naturalSize,
                                          zIndex: item.zIndex,
-                                         isLocked: item.isLocked)
+                                         isLocked: item.isLocked,
+                                         payloadJSON: payloadJSON)
                 context.insert(record)
                 record.page = page
             }
@@ -316,6 +329,10 @@ struct PageRepository {
         let descriptor = FetchDescriptor<ImageRecord>()
         let records = (try? context.fetch(descriptor)) ?? []
         var referenced = Set(records.map(\.fileName))
+        for fileName in records.map(\.fileName) {
+            let metaName = (fileName as NSString).deletingPathExtension + ".meta"
+            referenced.insert(metaName)
+        }
         let thumbDescriptor = FetchDescriptor<DrawingPage>()
         for page in (try? context.fetch(thumbDescriptor)) ?? [] {
             referenced.insert(page.drawingFile)

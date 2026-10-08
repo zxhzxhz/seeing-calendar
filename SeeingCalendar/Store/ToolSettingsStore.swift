@@ -30,6 +30,10 @@ struct ToolSettingsStore {
         static func penWidth(_ tool: CanvasTool) -> String {
             "editorTool.penWidth.\(tool.rawValue)"
         }
+
+        static func penOpacity(_ tool: CanvasTool) -> String {
+            "editorTool.penOpacity.\(tool.rawValue)"
+        }
     }
 
     // MARK: - 墨色（每支笔独立）
@@ -44,6 +48,20 @@ struct ToolSettingsStore {
     func setPenColor(_ hex: String, for tool: CanvasTool) {
         guard tool != .eraser, let normalized = Self.normalizedHex(hex) else { return }
         defaults.set(normalized, forKey: Key.penColor(tool))
+    }
+
+    // MARK: - 墨水不透明度（每支笔独立，0.05...1.0）
+
+    let penOpacityRange: ClosedRange<Double> = 0.05...1.0
+
+    func penOpacity(for tool: CanvasTool) -> Double? {
+        guard tool != .eraser else { return nil }
+        return clampedDouble(forKey: Key.penOpacity(tool), in: penOpacityRange)
+    }
+
+    func setPenOpacity(_ opacity: Double, for tool: CanvasTool) {
+        guard tool != .eraser, penOpacityRange.contains(opacity) else { return }
+        defaults.set(opacity, forKey: Key.penOpacity(tool))
     }
 
     // MARK: - 笔宽（每支笔独立存储与读取）

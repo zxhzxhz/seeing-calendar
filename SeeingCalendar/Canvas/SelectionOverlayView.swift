@@ -545,9 +545,9 @@ final class SelectionOverlayView: UIView {
             return [.finishCrop, .cancelCrop]
         case .image(_, let canEdit):
             if canEdit {
-                return [.edit, .copy, .bringToFront, .sendToBack, .lock, .delete]
+                return [.edit, .saveAsSticker, .copy, .bringToFront, .sendToBack, .lock, .delete]
             } else {
-                return [.copy, .crop, .replace, .bringToFront, .sendToBack, .lock, .delete]
+                return [.copy, .crop, .saveAsSticker, .replace, .bringToFront, .sendToBack, .lock, .delete]
             }
         }
     }

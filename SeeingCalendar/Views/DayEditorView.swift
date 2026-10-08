@@ -159,6 +159,27 @@ struct DayEditorView: View {
             Button("删除 Page \(model.pageIndex + 1)", role: .destructive) { model.deleteCurrentPage() }
             Button("取消", role: .cancel) {}
         }
+        .overlay(alignment: .top) {
+            if let msg = model.toastMessage {
+                Text(msg)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.black.opacity(0.8)))
+                    .padding(.top, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onAppear {
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            withAnimation {
+                                model.toastMessage = nil
+                            }
+                        }
+                    }
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: model.toastMessage)
     }
 
     private func photoPickerBinding(model: EditorModel) -> Binding<Bool> {
@@ -523,6 +544,22 @@ struct DayEditorView: View {
             Divider()
 
             HStack {
+                Text("不透明度").font(.subheadline)
+                Spacer()
+                Text("\(Int(round(model.penOpacity * 100)))%")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(get: { model.penOpacity }, set: { model.updatePenOpacity($0) }),
+                in: 0.1...1.0,
+                step: 0.05
+            )
+            .frame(width: 250)
+
+            Divider()
+
+            HStack {
                 Text("笔宽").font(.subheadline)
                 Spacer()
                 Text("\(Int(model.penWidth)) pt")
@@ -531,6 +568,32 @@ struct DayEditorView: View {
             }
             Slider(value: Binding(get: { model.penWidth }, set: { model.updatePenWidth($0) }), in: 1...28, step: 1)
                 .frame(width: 250)
+
+            // 固定粗细预设档位
+            let presets = model.currentWidthPresets
+            HStack(spacing: 8) {
+                ForEach(presets, id: \.self) { preset in
+                    Button {
+                        model.updatePenWidth(preset)
+                    } label: {
+                        Text("\(Int(preset)) pt")
+                            .font(.system(size: 12, weight: abs(model.penWidth - preset) < 0.5 ? .bold : .regular))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule()
+                                    .fill(abs(model.penWidth - preset) < 0.5 ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill))
+                            )
+                            .overlay(
+                                Capsule()
+                                    .stroke(abs(model.penWidth - preset) < 0.5 ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                            )
+                            .foregroundStyle(abs(model.penWidth - preset) < 0.5 ? Color.accentColor : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(width: 250, alignment: .leading)
         }
         .padding(16)
     }

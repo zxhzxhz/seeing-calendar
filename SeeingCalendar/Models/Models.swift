@@ -128,6 +128,9 @@ final class ImageRecord {
     var zIndex: Int
     /// 锁定后不可被选中/移动：用于把已排版好的素材固定为"底板"。
     var isLocked: Bool = false
+    /// 可编辑图元元数据（文本/形状配置，nil 表示普通贴图/照片）。
+    /// 带默认值 nil → SwiftData 零成本轻量自动迁移，旧记录无感升级。
+    var payloadJSON: String? = nil
     var page: DrawingPage?
 
     init(uuid: UUID = UUID(),
@@ -136,7 +139,8 @@ final class ImageRecord {
          cropRect: CGRect,
          naturalSize: CGSize,
          zIndex: Int,
-         isLocked: Bool = false) {
+         isLocked: Bool = false,
+         payloadJSON: String? = nil) {
         self.uuid = uuid
         self.fileName = fileName
         self.a = transform.a
@@ -153,6 +157,7 @@ final class ImageRecord {
         self.naturalHeight = naturalSize.height
         self.zIndex = zIndex
         self.isLocked = isLocked
+        self.payloadJSON = payloadJSON
     }
 
     var worldTransform: CGAffineTransform {

@@ -576,6 +576,9 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         case .replace:
             guard let id = selectedImageIDs.first else { return }
             onRequestImageReplace?(id)
+        case .saveAsSticker:
+            guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
+            onSaveItemAsSticker?(entity)
         case .bringToFront:
             bringSelectionToFront()
         case .sendToBack:

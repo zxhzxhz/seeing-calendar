@@ -22,6 +22,8 @@ enum AppPaths {
     static let drawings: URL = makeDirectory(root, "drawings")
     /// 贴图 / 照片原始码流（保持导入时的编码，不做二次转码）。
     static let assets: URL = makeDirectory(root, "assets")
+    /// 自定义贴纸库独立持久化目录。
+    static let customStickers: URL = makeDirectory(root, "CustomStickers")
     /// 自动本地快照。
     static let snapshots: URL = makeDirectory(root, "Backups")
     /// 分级缩略图缓存。
@@ -37,10 +39,11 @@ enum AppPaths {
 
     static func drawingURL(_ fileName: String) -> URL { drawings.appendingPathComponent(fileName) }
     static func assetURL(_ fileName: String) -> URL { assets.appendingPathComponent(fileName) }
+    static func customStickerURL(_ fileName: String) -> URL { customStickers.appendingPathComponent(fileName) }
     static func thumbnailURL(_ fileName: String) -> URL { thumbnails.appendingPathComponent(fileName) }
 
     static func ensureDirectories() {
-        _ = [root, cacheRoot, drawings, assets, snapshots, thumbnails, work]
+        _ = [root, cacheRoot, drawings, assets, customStickers, snapshots, thumbnails, work]
         let temporary = work.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: temporary)

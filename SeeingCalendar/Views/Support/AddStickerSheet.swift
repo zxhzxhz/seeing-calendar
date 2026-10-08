@@ -11,6 +11,9 @@ struct AddStickerSheet: View {
     @State private var selectedEmojiCategoryIndex: Int = 0
     @State private var clipboardImage: UIImage?
     @State private var photosPickerItem: PhotosPickerItem?
+    @ObservedObject private var customStickerStore = CustomStickerStore.shared
+    @State private var isManagingCustomStickers: Bool = false
+    @State private var customPhotosPickerItem: PhotosPickerItem?
 
     // MARK: - Emoji 分类库（标准系统 Emoji 库）
 
@@ -177,16 +180,19 @@ struct AddStickerSheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("分类", selection: $selectedTab) {
-                    Text("系统 Emoji").tag(0)
-                    Text("系统贴纸").tag(1)
-                    Text("手帐徽章").tag(2)
+                    Text("自定义贴纸").tag(0)
+                    Text("系统 Emoji").tag(1)
+                    Text("系统贴纸").tag(2)
+                    Text("手帐徽章").tag(3)
                 }
                 .pickerStyle(.segmented)
                 .padding()
 
                 if selectedTab == 0 {
-                    emojiCategorizedView
+                    customStickersView
                 } else if selectedTab == 1 {
+                    emojiCategorizedView
+                } else if selectedTab == 2 {
                     systemStickerView
                 } else {
                     badgeView
@@ -202,6 +208,196 @@ struct AddStickerSheet: View {
             .onAppear {
                 checkClipboardForSticker()
             }
+        }
+    }
+
+    // MARK: - 0. 自定义贴纸视图
+
+    private var customStickersView: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                // 顶部操作工具条：相册导入 / 排序切换 / 管理模式
+                HStack(spacing: 10) {
+                    PhotosPicker(selection: $customPhotosPickerItem, matching: .images) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "photo.badge.plus")
+                            Text("导入图片")
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.accentColor.opacity(0.15))
+                        .foregroundStyle(Color.accentColor)
+                        .clipShape(Capsule())
+                    }
+                    .onChange(of: customPhotosPickerItem) { _, newItem in
+                        Task {
+                            if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                                await MainActor.run {
+                                    customStickerStore.addSticker(imageData: data)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer()
+
+                    // 排序方式切换（顺序：最早在前 / 逆序：最新在前）
+                    Button {
+                        customStickerStore.sortAscending.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: customStickerStore.sortAscending ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                            Text(customStickerStore.sortAscending ? "最早在前" : "最新在前")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(uiColor: .tertiarySystemFill))
+                        .foregroundStyle(.secondary)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    // 管理 / 完成切换
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isManagingCustomStickers.toggle()
+                        }
+                    } label: {
+                        Text(isManagingCustomStickers ? "完成" : "管理")
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isManagingCustomStickers ? Color.accentColor : Color(uiColor: .tertiarySystemFill))
+                            .foregroundStyle(isManagingCustomStickers ? .white : .primary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal)
+
+                // 系统键盘贴纸接收条与剪贴板快捷添加
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("键盘贴纸与剪贴板导入", systemImage: "keyboard")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+
+                    StickerKeyboardDropField { image in
+                        if let data = image.pngData() {
+                            customStickerStore.addSticker(imageData: data)
+                        }
+                    }
+                    .frame(height: 42)
+
+                    if let image = clipboardImage {
+                        Button {
+                            if let data = image.pngData() {
+                                customStickerStore.addSticker(imageData: data)
+                                clipboardImage = nil
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.on.clipboard")
+                                Text("将当前剪贴板图片存入贴纸库")
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                )
+                .padding(.horizontal)
+
+                Divider().padding(.horizontal)
+
+                // 贴纸列表网格展示
+                let stickers = customStickerStore.sortedItems
+                if stickers.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "sparkles.rectangle.stack")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 40)
+                        Text("暂无自定义贴纸")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                        Text("• 从上方相册导入图片或通过键盘贴纸输入\n• 在画布中选中文字、形状或图片，轻点「存贴纸」即可添加")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(4)
+                            .padding(.horizontal, 30)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 40)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 14)], spacing: 14) {
+                        ForEach(stickers) { item in
+                            ZStack(alignment: .topTrailing) {
+                                Button {
+                                    if !isManagingCustomStickers {
+                                        if let data = customStickerStore.stickerData(for: item) {
+                                            onCommit(data)
+                                            dismiss()
+                                        }
+                                    }
+                                } label: {
+                                    ZStack {
+                                        CheckerboardBackground()
+                                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        if let img = customStickerStore.stickerImage(for: item) {
+                                            Image(uiImage: img)
+                                                .resizable()
+                                                .scaledToFit()
+                                                .padding(6)
+                                        }
+                                    }
+                                    .frame(width: 84, height: 84)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(Color(uiColor: .separator), lineWidth: 0.5)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        withAnimation {
+                                            customStickerStore.deleteSticker(id: item.id)
+                                        }
+                                    } label: {
+                                        Label("删除贴纸", systemImage: "trash")
+                                    }
+                                }
+
+                                if isManagingCustomStickers {
+                                    Button {
+                                        withAnimation {
+                                            customStickerStore.deleteSticker(id: item.id)
+                                        }
+                                    } label: {
+                                        Image(systemName: "minus.circle.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundStyle(.white, .red)
+                                            .background(Circle().fill(.white).frame(width: 14, height: 14))
+                                    }
+                                    .offset(x: 6, y: -6)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 24)
+                }
+            }
+            .padding(.top, 8)
         }
     }
 

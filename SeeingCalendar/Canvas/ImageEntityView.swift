@@ -238,4 +238,66 @@ final class ImageEntityView: UIImageView {
             break
         }
     }
+
+    // MARK: - 自定义贴纸导出与特征指纹
+
+    /// 按照图元当前的裁剪、缩放与旋转，渲染出透明贴纸图片
+    func renderStickerImage() -> UIImage? {
+        guard let cgImage = sourceImage.cgImage else { return sourceImage }
+        let imgW = CGFloat(cgImage.width)
+        let imgH = CGFloat(cgImage.height)
+        let cropPixelRect = CGRect(
+            x: cropRect.origin.x * imgW,
+            y: cropRect.origin.y * imgH,
+            width: cropRect.size.width * imgW,
+            height: cropRect.size.height * imgH
+        ).integral
+
+        let croppedCG = cgImage.cropping(to: cropPixelRect) ?? cgImage
+        let croppedImage = UIImage(cgImage: croppedCG, scale: sourceImage.scale, orientation: sourceImage.imageOrientation)
+
+        let angle = atan2(worldTransform.b, worldTransform.a)
+        let sx = hypot(worldTransform.a, worldTransform.c)
+        let sy = hypot(worldTransform.b, worldTransform.d)
+        let targetW = max(16, visibleSize.width * sx)
+        let targetH = max(16, visibleSize.height * sy)
+
+        let rotatedBounds = CGRect(origin: .zero, size: CGSize(width: targetW, height: targetH))
+            .applying(CGAffineTransform(rotationAngle: angle))
+        let renderSize = CGSize(width: max(16, ceil(rotatedBounds.width)), height: max(16, ceil(rotatedBounds.height)))
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2.0
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: renderSize, format: format)
+        return renderer.image { ctx in
+            let cgCtx = ctx.cgContext
+            cgCtx.translateBy(x: renderSize.width / 2, y: renderSize.height / 2)
+            cgCtx.rotate(by: angle)
+            croppedImage.draw(in: CGRect(x: -targetW / 2, y: -targetH / 2, width: targetW, height: targetH))
+        }
+    }
+
+    /// 特征指纹：由图元 ID、尺寸、裁剪、旋转及内容特征共同决定；
+    /// 尺寸、裁剪、旋转或文字内容发生改变时指纹会变化，再次添加将成为新贴纸。
+    var stickerFingerprint: String {
+        let sx = hypot(worldTransform.a, worldTransform.c)
+        let sy = hypot(worldTransform.b, worldTransform.d)
+        let targetW = max(16, visibleSize.width * sx)
+        let targetH = max(16, visibleSize.height * sy)
+        let angleDeg = Int(round((atan2(worldTransform.b, worldTransform.a) * 180 / .pi)))
+        let w = Int(round(targetW))
+        let h = Int(round(targetH))
+        let cropStr = "\(Int(cropRect.origin.x * 1000))_\(Int(cropRect.origin.y * 1000))_\(Int(cropRect.size.width * 1000))_\(Int(cropRect.size.height * 1000))"
+        var contentSig = ""
+        if let payload {
+            switch payload {
+            case .text(let config):
+                contentSig = "text:\(config.text):\(config.fontSize):\(config.textColorHex):\(config.isBold):\(config.isItalic)"
+            case .shape(let config):
+                contentSig = "shape:\(config.shapeKindRaw):\(config.strokeColorHex):\(config.strokeWidth):\(config.fillColorHex)"
+            }
+        }
+        return "\(itemID.uuidString):\(w)x\(h):\(cropStr):\(angleDeg):\(contentSig)"
+    }
 }

@@ -51,6 +51,7 @@ enum SelectionAction: Equatable {
     case finishCrop
     case cancelCrop
     case replace
+    case saveAsSticker
     case bringToFront
     case sendToBack
     case lock
@@ -68,6 +69,7 @@ enum SelectionAction: Equatable {
         case .finishCrop: return "完成裁剪"
         case .cancelCrop: return "取消裁剪"
         case .replace: return "替换"
+        case .saveAsSticker: return "存为贴纸"
         case .bringToFront: return "置顶（笔迹之上）"
         case .sendToBack: return "置底"
         case .lock: return "锁定贴图"
@@ -87,6 +89,7 @@ enum SelectionAction: Equatable {
         case .finishCrop: return "checkmark"
         case .cancelCrop: return "xmark"
         case .replace: return "arrow.triangle.2.circlepath"
+        case .saveAsSticker: return "sparkles.rectangle.stack"
         case .bringToFront: return "square.3.layers.3d.top.filled"
         case .sendToBack: return "square.3.layers.3d.bottom.filled"
         case .lock: return "lock.fill"
@@ -118,6 +121,7 @@ extension SelectionAction {
         case .finishCrop: return "完成"
         case .cancelCrop: return "取消"
         case .replace: return "替换"
+        case .saveAsSticker: return "存贴纸"
         case .bringToFront: return "置顶"
         case .sendToBack: return "置底"
         case .lock: return "锁定"
