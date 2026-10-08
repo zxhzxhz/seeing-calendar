@@ -497,8 +497,10 @@ private struct StickerKeyboardDropField: UIViewRepresentable {
 private final class StickerCatchingTextField: UITextField {
     var onImageReceived: ((UIImage) -> Void)?
 
-    override func canPerformAction(_ action: #selector(paste(_:)), withSender sender: Any?) -> Bool {
-        if UIPasteboard.general.hasImages { return true }
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) {
+            return UIPasteboard.general.hasImages
+        }
         return super.canPerformAction(action, withSender: sender)
     }
 
