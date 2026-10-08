@@ -242,39 +242,43 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
         Task { @MainActor in
-            let status = manager.authorizationStatus
             if (status == .authorizedWhenInUse || status == .authorizedAlways) && self.useAutoLocation {
-                manager.requestLocation()
+                self.locationManager.requestLocation()
             }
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
+        let lat = loc.coordinate.latitude
+        let lon = loc.coordinate.longitude
         Task { @MainActor in
-            await self.resolveLocationName(for: loc)
+            await self.resolveLocationName(latitude: lat, longitude: lon)
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        let msg = error.localizedDescription
         Task { @MainActor in
-            self.lastError = "定位失败：\(error.localizedDescription)"
+            self.lastError = "定位失败：\(msg)"
         }
     }
 
-    private func resolveLocationName(for loc: CLLocation) async {
+    private func resolveLocationName(latitude lat: Double, longitude lon: Double) async {
+        let loc = CLLocation(latitude: lat, longitude: lon)
         let geocoder = CLGeocoder()
         guard let placemarks = try? await geocoder.reverseGeocodeLocation(loc),
               let mark = placemarks.first else {
-            currentLocation = WeatherLocation(name: "当前位置", latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude, admin1: nil, country: nil)
+            currentLocation = WeatherLocation(name: "当前位置", latitude: lat, longitude: lon, admin1: nil, country: nil)
             return
         }
         let name = mark.locality ?? mark.subAdministrativeArea ?? mark.administrativeArea ?? "当前位置"
         currentLocation = WeatherLocation(
             name: name,
-            latitude: loc.coordinate.latitude,
-            longitude: loc.coordinate.longitude,
+            latitude: lat,
+            longitude: lon,
             admin1: mark.administrativeArea,
             country: mark.country
         )
