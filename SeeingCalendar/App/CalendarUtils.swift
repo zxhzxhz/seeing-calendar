@@ -98,14 +98,30 @@ enum CalendarUtils {
 
     // MARK: - 月历矩阵（固定 6 行 × 7 列 = 42 格，保证布局零抖动）
 
+    private static let gridDatesLock = NSLock()
+    private static var gridDatesCache: [String: [Date]] = [:]
+
     static func gridDates(forMonthContaining date: Date) -> [Date] {
         let first = startOfMonth(date)
+        let monthKey = key(for: first)
+        gridDatesLock.lock()
+        if let cached = gridDatesCache[monthKey] {
+            gridDatesLock.unlock()
+            return cached
+        }
+        gridDatesLock.unlock()
+
         let weekday = calendar.component(.weekday, from: first)
         let leading = (weekday - calendar.firstWeekday + 7) % 7
         // 锚定在中午 12:00 加减天数，防御夏令时（DST）切换导致的跨天时间漂移
         let noonFirst = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: first) ?? first
         let start = addDays(-leading, to: noonFirst)
-        return (0..<42).map { addDays($0, to: start) }
+        let dates = (0..<42).map { addDays($0, to: start) }
+
+        gridDatesLock.lock()
+        gridDatesCache[monthKey] = dates
+        gridDatesLock.unlock()
+        return dates
     }
 
     static func title(forMonth date: Date) -> String {

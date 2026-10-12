@@ -111,6 +111,7 @@ struct MonthPager: View {
                              onSelect: onSelect,
                              onOpen: onOpen)
             .equatable()
+            .compositingGroup()
             .frame(width: containerWidth)
     }
 

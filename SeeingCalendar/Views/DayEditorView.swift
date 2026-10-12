@@ -29,8 +29,6 @@ struct DayEditorView: View {
     @State private var isAddStickerPresented = false
     @State private var isAddSignaturePresented = false
     @State private var isAddShapePresented = false
-    /// 顶部标签行 / 页条下拉返回的进行中标记。
-    @State private var isPullDownDismissing = false
     @Namespace private var pageStripNamespace
 
     init(day: DayRecord,
@@ -73,8 +71,10 @@ struct DayEditorView: View {
                 pageStrip(model: model)
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 CanvasRepresentable(model: model)
-                    .overlay(alignment: .top) { hintBanner(model: model) }
-                    .animation(.spring(response: 0.22, dampingFraction: 0.84), value: model.selectionKind != .none)
+                    .overlay(alignment: .top) {
+                        hintBanner(model: model)
+                            .animation(.spring(response: 0.22, dampingFraction: 0.84), value: model.selectionKind != .none)
+                    }
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 toolBar(model: model)
             }
@@ -166,26 +166,28 @@ struct DayEditorView: View {
             Button("取消", role: .cancel) {}
         }
         .overlay(alignment: .top) {
-            if let msg = model.toastMessage {
-                Text(msg)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.black.opacity(0.8)))
-                    .padding(.top, 16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .onAppear {
-                        Task {
-                            try? await Task.sleep(nanoseconds: 1_500_000_000)
-                            withAnimation {
-                                model.toastMessage = nil
+            ZStack {
+                if let msg = model.toastMessage {
+                    Text(msg)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.black.opacity(0.8)))
+                        .padding(.top, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .onAppear {
+                            Task {
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                withAnimation {
+                                    model.toastMessage = nil
+                                }
                             }
                         }
-                    }
+                }
             }
+            .animation(.easeInOut(duration: 0.25), value: model.toastMessage)
         }
-        .animation(.easeInOut(duration: 0.25), value: model.toastMessage)
     }
 
     private func photoPickerBinding(model: EditorModel) -> Binding<Bool> {
@@ -238,17 +240,14 @@ struct DayEditorView: View {
                             if isSelected {
                                 Capsule()
                                     .fill(Color.accentColor.opacity(0.16))
-                                    .matchedGeometryEffect(id: "activePageCapsule", in: pageStripNamespace)
+                                    .overlay(
+                                        Capsule()
+                                            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+                                    )
+                                    .matchedGeometryEffect(id: "activePageIndicator", in: pageStripNamespace)
                             } else {
                                 Capsule()
                                     .fill(Color(uiColor: .secondarySystemBackground))
-                            }
-                        }
-                        .overlay {
-                            if isSelected {
-                                Capsule()
-                                    .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
-                                    .matchedGeometryEffect(id: "activePageBorder", in: pageStripNamespace)
                             }
                         }
                     }
@@ -721,16 +720,12 @@ struct DayEditorView: View {
     /// 只认「向下为主」的拖动，位移 > 90pt 或预测位移 > 180pt 即返回主页面。
     private var pullDownToDismiss: some Gesture {
         DragGesture(minimumDistance: 16)
-            .onChanged { value in
-                guard abs(value.translation.height) > abs(value.translation.width) else { return }
-                isPullDownDismissing = true
-            }
             .onEnded { value in
-                defer { isPullDownDismissing = false }
-                guard isPullDownDismissing else { return }
-                let distance = value.translation.height
+                let dy = value.translation.height
+                let dx = value.translation.width
+                guard dy > abs(dx) else { return }
                 let projected = value.predictedEndTranslation.height
-                guard distance > 90 || projected > 180 else { return }
+                guard dy > 90 || projected > 180 else { return }
                 dismiss()
             }
     }

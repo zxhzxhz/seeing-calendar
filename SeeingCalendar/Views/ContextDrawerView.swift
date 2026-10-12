@@ -31,6 +31,7 @@ struct ContextDrawerView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         )
+        .compositingGroup()
         .shadow(color: Color.black.opacity(0.03), radius: 10, x: 0, y: 3)
         .padding(.horizontal, 16)
         .task(id: ThumbnailStore.shared.version) {

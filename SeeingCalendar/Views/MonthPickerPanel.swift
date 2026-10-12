@@ -62,6 +62,7 @@ struct MonthPickerPanel: View {
             RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         )
+        .compositingGroup()
         .shadow(color: .black.opacity(0.06), radius: 20, y: 8)
     }
 
