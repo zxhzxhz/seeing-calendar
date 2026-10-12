@@ -46,8 +46,8 @@ struct DayCellPalette {
         }),
         border: Color(uiColor: UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.60, green: 0.35, blue: 0.25, alpha: 0.26)
-                : UIColor(red: 0.880, green: 0.620, blue: 0.500, alpha: 0.22)
+                ? UIColor(red: 0.60, green: 0.35, blue: 0.25, alpha: 0.18)
+                : UIColor(red: 0.880, green: 0.620, blue: 0.500, alpha: 0.16)
         }),
         badgeBackground: Color(red: 0.855, green: 0.357, blue: 0.180),
         badgeForeground: .white,
@@ -62,7 +62,7 @@ struct DayCellPalette {
     static let neutral = DayCellPalette(
         background: Color(uiColor: .secondarySystemBackground),
         number: .primary,
-        border: Color.primary.opacity(0.10),
+        border: Color.primary.opacity(0.06),
         badgeBackground: Color(red: 0.184, green: 0.620, blue: 0.431),
         badgeForeground: .white,
         numberPlate: Color(uiColor: .systemBackground).opacity(0.78)
@@ -72,7 +72,7 @@ struct DayCellPalette {
     static let dimmed = DayCellPalette(
         background: Color(uiColor: .systemGroupedBackground),
         number: Color.secondary.opacity(0.55),
-        border: Color.primary.opacity(0.05),
+        border: Color.primary.opacity(0.04),
         badgeBackground: Color.secondary.opacity(0.5),
         badgeForeground: Color.white.opacity(0.9),
         numberPlate: Color(uiColor: .systemBackground).opacity(0.45)
@@ -138,13 +138,13 @@ struct DayCellView: View {
             .overlay {
                 if isPulsing {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.accentColor, lineWidth: 3)
-                        .scaleEffect(1 + 0.45 * pulseProgress)
+                        .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                        .scaleEffect(1 + 0.35 * pulseProgress)
                         .opacity(Double(1 - pulseProgress))
                         .id(pulseID)
                         .onAppear {
                             pulseProgress = 0
-                            withAnimation(.easeOut(duration: 0.62)) {
+                            withAnimation(.spring(response: 0.24, dampingFraction: 0.80)) {
                                 pulseProgress = 1
                             }
                         }
@@ -166,7 +166,7 @@ struct DayCellView: View {
         if thumbnail == nil {
             Rectangle().fill(palette.background)
         } else {
-            Rectangle().fill(thumbnail == nil ? palette.background : .white)
+            Rectangle().fill(Color(uiColor: .secondarySystemGroupedBackground))
         }
     }
 

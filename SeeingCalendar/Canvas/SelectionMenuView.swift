@@ -40,6 +40,8 @@ final class SelectionMenuView: UIView {
         backdrop.layer.cornerRadius = Self.cornerRadius
         backdrop.layer.cornerCurve = .continuous
         backdrop.clipsToBounds = true
+        backdrop.layer.borderColor = UIColor.separator.withAlphaComponent(0.2).cgColor
+        backdrop.layer.borderWidth = 0.5
         addSubview(backdrop)
 
         row.axis = .horizontal
@@ -60,9 +62,9 @@ final class SelectionMenuView: UIView {
         ])
 
         layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.18
-        layer.shadowRadius = 8
-        layer.shadowOffset = CGSize(width: 0, height: 2)
+        layer.shadowOpacity = 0.04
+        layer.shadowRadius = 14
+        layer.shadowOffset = CGSize(width: 0, height: 4)
     }
 
     required init?(coder: NSCoder) {

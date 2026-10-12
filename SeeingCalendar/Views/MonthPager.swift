@@ -21,7 +21,7 @@ final class MonthPagerState {
     func settle(to target: CGFloat, commit: @escaping () -> Void) {
         guard !isSettling else { return }
         isSettling = true
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
             offset = target
         } completion: {
             // 逃逸闭包必须显式 self（Swift 6）
@@ -33,7 +33,7 @@ final class MonthPagerState {
 
     /// 未达翻页阈值：弹回原位。
     func springBack() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
             offset = 0
         }
     }
@@ -122,7 +122,16 @@ struct MonthPager: View {
                 let dx = value.translation.width
                 let dy = value.translation.height
                 guard abs(dx) > abs(dy) else { return }   // 只接管横向滑动
-                state.offset = dx
+
+                // 阻尼处理：超出单屏宽度时施加物理阻尼，避免直生生拖穿边界
+                let limit = containerWidth
+                if abs(dx) > limit {
+                    let over = abs(dx) - limit
+                    let damped = limit + over * 0.45
+                    state.offset = dx > 0 ? damped : -damped
+                } else {
+                    state.offset = dx
+                }
             }
             .onEnded { value in
                 guard !state.isSettling else { return }

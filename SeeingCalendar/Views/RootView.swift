@@ -70,7 +70,7 @@ struct RootView: View {
             let isPortrait = DeviceLayout.isPortraitLayout(horizontalSizeClass: horizontalSizeClass, size: proxy.size)
             VStack(spacing: 0) {
                 headerBar(containerWidth: proxy.size.width)
-                Divider()
+                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 if isPortrait {
                     portraitLayout(width: proxy.size.width)
                 } else {
@@ -134,11 +134,10 @@ struct RootView: View {
 
     private func portraitLayout(width: CGFloat) -> some View {
         ScrollView(.vertical) {
-            VStack(spacing: 0) {
+            VStack(spacing: 12) {
                 monthPager(availableSize: CGSize(width: width - 24, height: 1_000_000),
                            containerWidth: width)
-                    .padding(.vertical, 10)
-                Divider()
+                    .padding(.vertical, 8)
                 ContextDrawerView(date: selectedDate,
                                   record: selectedRecord,
                                   events: scopedEvents(on: selectedDate),
@@ -149,6 +148,7 @@ struct RootView: View {
                                       repository.updateNote(text, for: record)
                                   })
             }
+            .padding(.bottom, 24)
         }
         .scrollDismissesKeyboard(.interactively)
         .scrollIndicators(.hidden)
@@ -283,14 +283,17 @@ struct RootView: View {
 
     private func headerBar(containerWidth: CGFloat) -> some View {
         HStack(spacing: 12) {
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 Button {
                     shiftMonth(-1, containerWidth: containerWidth)
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 30, height: 30)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("上个月")
 
                 // 年月标题即月份选择器的入口（Drop Menu）：点一下弹出 3×4 月份面板。
@@ -315,9 +318,12 @@ struct RootView: View {
                     shiftMonth(1, containerWidth: containerWidth)
                 } label: {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 30, height: 30)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("下个月")
             }
 
@@ -325,14 +331,19 @@ struct RootView: View {
                 goToToday(containerWidth: containerWidth)
             }
             .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(Color.accentColor.opacity(0.12))
+            )
+            .buttonStyle(.plain)
 
             if eventStore.isRefreshing {
                 ProgressView().controlSize(.small)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 16)
 
             workspaceMenu
 
@@ -340,45 +351,53 @@ struct RootView: View {
                 fingerDrawingEnabled.toggle()
             } label: {
                 Image(systemName: fingerDrawingEnabled ? "hand.draw.fill" : "hand.draw")
-                    .font(.system(size: 15))
+                    .font(.system(size: 14))
                     .foregroundStyle(fingerDrawingEnabled ? Color.accentColor : .primary)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 30, height: 30)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(fingerDrawingEnabled ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill).opacity(0.6))
+                            .fill(fingerDrawingEnabled ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill).opacity(0.5))
                     )
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("手指书写开关")
 
+            moreActionsMenu
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+    }
+
+    private var moreActionsMenu: some View {
+        Menu {
             Button {
                 showSubscriptions = true
             } label: {
-                Image(systemName: "calendar.badge.plus")
-                    .font(.system(size: 15))
-                    .frame(width: 32, height: 32)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color(uiColor: .tertiarySystemFill).opacity(0.6))
-                    )
+                Label("订阅与维度", systemImage: "calendar.badge.plus")
             }
             .accessibilityLabel("订阅与维度")
 
             Button {
                 showBackup = true
             } label: {
-                Image(systemName: "externaldrive")
-                    .font(.system(size: 15))
-                    .frame(width: 32, height: 32)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color(uiColor: .tertiarySystemFill).opacity(0.6))
-                    )
+                Label("备份与恢复", systemImage: "externaldrive")
             }
             .accessibilityLabel("备份与恢复")
+
+            Divider()
+            Text("看见Calendar v\(AppVersion.display)")
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(uiColor: .tertiarySystemFill).opacity(0.5))
+                )
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color(uiColor: .systemBackground))
+        .accessibilityLabel("更多设置")
     }
 
     private var workspaceMenu: some View {
@@ -403,16 +422,21 @@ struct RootView: View {
             Divider()
             Text("版本 \(AppVersion.display)")
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 12))
+                    .font(.system(size: 11, weight: .medium))
                 Text(workspace?.name ?? "维度")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
                     .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Capsule().fill(Color(uiColor: .secondarySystemBackground)))
+            .background(
+                Capsule().fill(Color(uiColor: .tertiarySystemFill).opacity(0.5))
+            )
+            .overlay(
+                Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+            )
         }
     }
 
@@ -433,7 +457,7 @@ struct RootView: View {
 
         if CalendarUtils.isSameDay(todayMonth, month) {
             // 情况 A：今天就在当前月 → 只做选中动画 + 脉冲高亮
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
                 selectedDate = today
             }
             triggerPulse(key)
@@ -451,7 +475,7 @@ struct RootView: View {
                 triggerPulse(key)
             }
         } else {
-            withAnimation(.easeInOut(duration: 0.22)) {
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.84)) {
                 month = todayMonth
                 selectedDate = today
             }
@@ -466,7 +490,7 @@ struct RootView: View {
     private func pickMonth(_ target: Date) {
         showMonthPicker = false
         guard !CalendarUtils.isSameMonth(target, month) else { return }
-        withAnimation(.easeInOut(duration: 0.22)) { month = target }
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.84)) { month = target }
     }
 
     private func triggerPulse(_ key: String) {

@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.32] — UI 架构降噪与层级材质重构 · P0~P2 物理动效工程落地
+
+### 视觉架构与信息降噪 (Design Engineering & Apple HIG)
+- **信息架构降噪与渐进式呈现 (Negative Space & Progressive Disclosure)**
+  - 梳理主界面首屏信息优先级，聚焦高频主视觉：年月翻页与“今天”胶囊定位。
+  - 将平铺在顶栏的次要设置（订阅管理、备份恢复等）收纳至右上角更多设置 Menu，消除平铺堆砌，恢复开阔呼吸感。
+- **苹果原生系统级层级色彩与材质 (Materials & Hierarchy)**
+  - 规范界面底层使用 `Color(uiColor: .systemGroupedBackground)`，卡片容器使用 `.secondarySystemGroupedBackground`。
+  - 移除硬编码纯色与生硬深黑阴影，升级为自适应微描边（`Color.primary.opacity(0.06)`）配合超低不透明度（`opacity < 0.05`）柔和漫反射环境阴影。
+  - 底部动态扩展区重构为规范的 Apple Inset Grouped 悬浮卡片容器。
+- **8pt 栅格节奏与连续平滑圆角规范化 (Grid & Curvature)**
+  - 全局内外边距与间距严格统一为 8pt / 12pt / 16pt / 20pt 节奏。
+  - 容器统一采用 12~18pt `.continuous` 平滑连续圆角，消灭生硬几何倒角。
+
+### P0~P2 交互动效重构工程 (Physics & Fluid Motion)
+- **【P0】高频时延消除与手势阻尼 (Kill Latency & Resistance)**
+  - `DayCellView`：定位脉冲耗时由 620ms 缩短优化为 240ms 弹性响应（`.spring(response: 0.24, dampingFraction: 0.80)`），消灭拖泥带水。
+  - `RootView` & `MonthPickerPanel`：消灭跨月/翻年切换中的 `easeInOut` 延迟曲线，全面换装直接响应式弹簧（`.spring(response: 0.24, dampingFraction: 0.84)`）。
+  - `MonthPager`：翻月手势引入物理橡皮筋阻尼（Rubber-banding），优化滑动手势的物理连续感。
+- **【P1】空间连续性与视标平滑滑行 (Spatial Continuity)**
+  - `MonthGridView`：选中框接入滑行弹簧（Glide Spring），在网格内选日时平滑过渡到目标单元格，并附加微光环境投影。
+  - `DayEditorView`：多页标签条引入 `matchedGeometryEffect`，选定页码时活动高亮胶囊平滑流体滑动；提示条引入微缩放配合透明度进出场过渡。
+  - `SelectionOverlayView`：自绘选区浮动菜单入场升级为自锚点立体微缩放弹性弹出（`scale(0.94) + translateY(4)` 至恒等变换）。
+- **【P2】微交互反馈与折叠时序 (Tactile Feedback & Polish)**
+  - `ContextDrawerView`：画作轮播缩略图增加 `:active` 按压缩放（0.96）触感反馈（`BouncyCardButtonStyle`）。
+  - `SubscriptionScopeRows`：折叠展开与旋转指示器统一时序弹簧，勾选行状态切换增加微缩放动态过渡。
+
 ## [1.0.31] — Apple HIG 视觉系统重构 · 顶部信息层级与浮动工具条打磨 · 天气与排序面板现代化
 
 ### 界面与体验打磨 (Apple HIG Polish)

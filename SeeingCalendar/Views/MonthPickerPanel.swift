@@ -60,9 +60,9 @@ struct MonthPickerPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.16), radius: 22, y: 10)
+        .shadow(color: .black.opacity(0.06), radius: 20, y: 8)
     }
 
     // MARK: - 年份行
@@ -178,7 +178,7 @@ struct MonthPickerPanel: View {
     /// 切年的唯一入口：箭头与滑动手势都走这里，两条路径的动画与方向语义因此不会分叉。
     private func stepYear(_ delta: Int) {
         slideDirection = delta
-        withAnimation(.easeInOut(duration: 0.20)) { browsingYear += delta }
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) { browsingYear += delta }
     }
 
     // MARK: - 月份格

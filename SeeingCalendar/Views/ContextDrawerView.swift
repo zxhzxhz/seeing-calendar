@@ -15,15 +15,24 @@ struct ContextDrawerView: View {
     /// 存储属性的默认值初始化发生在非隔离的 memberwise init 里，取 `@MainActor` 单例会报警。
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             header
             timeline
             carousel
             noteSection
         }
-        .padding(16)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .systemBackground))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.03), radius: 10, x: 0, y: 3)
+        .padding(.horizontal, 16)
         .task(id: ThumbnailStore.shared.version) {
             await loadThumbnails()
         }
@@ -31,11 +40,11 @@ struct ContextDrawerView: View {
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(CalendarUtils.relativeLabel(for: date))
                     .font(.system(size: 18, weight: .bold, design: .rounded))
                 Text(record == nil ? "暂无画布内容 · 点按格子即可开始创作" : "共 \(record?.pages.count ?? 0) 页画布")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -43,7 +52,8 @@ struct ContextDrawerView: View {
                 onOpenPage(0)
             } label: {
                 Label("打开画布", systemImage: "square.and.pencil")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 4)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -52,7 +62,7 @@ struct ContextDrawerView: View {
 
     @ViewBuilder
     private var timeline: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Label("当日日程", systemImage: "clock")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -85,42 +95,43 @@ struct ContextDrawerView: View {
     @ViewBuilder
     private var carousel: some View {
         if let pages = record?.orderedPages, !pages.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 Label("画作轮播", systemImage: "photo.stack")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         ForEach(Array(pages.enumerated()), id: \.element.uuid) { index, page in
                             Button {
                                 onOpenPage(index)
                             } label: {
-                                VStack(spacing: 4) {
+                                VStack(spacing: 6) {
                                     ZStack {
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(Color(uiColor: .secondarySystemBackground))
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(Color(uiColor: .tertiarySystemGroupedBackground))
                                         if let image = ThumbnailStore.shared.image(page.pageSlot) {
                                             Image(uiImage: image)
                                                 .resizable()
                                                 .aspectRatio(1, contentMode: .fill)
-                                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         } else {
                                             Image(systemName: "scribble.variable")
+                                                .font(.system(size: 24))
                                                 .foregroundStyle(.tertiary)
                                         }
                                     }
                                     .frame(width: 92, height: 92)
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .strokeBorder(index == 0 ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.08),
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .strokeBorder(index == 0 ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.06),
                                                           lineWidth: 1)
                                     )
                                     Text(index == 0 ? "Page 1 · 封面" : "Page \(index + 1)")
-                                        .font(.system(size: 10))
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(BouncyCardButtonStyle())
                         }
                     }
                 }
@@ -129,7 +140,7 @@ struct ContextDrawerView: View {
     }
 
     private var noteSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Label("快捷记录", systemImage: "text.append")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -168,10 +179,14 @@ private struct QuickNoteEditor: View {
             .lineLimit(2...6)
             .focused($isFocused)
             .textFieldStyle(.plain)
-            .padding(10)
+            .padding(12)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
             )
             .onAppear {
                 if text != initialText { text = initialText }
@@ -198,5 +213,14 @@ private struct QuickNoteEditor: View {
             guard !Task.isCancelled else { return }
             onCommit(value)
         }
+    }
+}
+
+/// Emil Kowalski & Apple Design 按压缩放微交互反馈
+private struct BouncyCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.spring(response: 0.20, dampingFraction: 0.75), value: configuration.isPressed)
     }
 }

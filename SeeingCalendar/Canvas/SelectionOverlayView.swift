@@ -413,11 +413,16 @@ final class SelectionOverlayView: UIView {
         placeMenu(menu, selection: selection)
 
         if menu.alpha < 0.01 {
-            // 首次出现：极短的入场动画，视觉上等同即时弹出。
+            // 首次出现：触觉微缩放弹簧入场（Emil Kowalski: 从 0.94 配合透明度立体展开）
             menu.alpha = 0
-            UIView.animate(withDuration: 0.09) { menu.alpha = 1 }
+            menu.transform = CGAffineTransform(scaleX: 0.94, y: 0.94).translatedBy(x: 0, y: 4)
+            UIView.animate(withDuration: 0.18, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.5, options: [.allowUserInteraction, .beginFromCurrentState]) {
+                menu.alpha = 1
+                menu.transform = .identity
+            }
         } else {
             menu.alpha = 1
+            menu.transform = .identity
         }
     }
 

@@ -20,7 +20,7 @@ extension View {
         // 摘要行：右侧只报数量，不拼维度名 —— 用户自建的维度名可能很长，
         // 拼进来会让这一行的高度随名字变化，列表看起来在抖。
         Button {
-            withAnimation(.snappy(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) { isExpanded.wrappedValue.toggle() }
         } label: {
             HStack {
                 Text("作用域")
@@ -31,6 +31,7 @@ extension View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(isExpanded.wrappedValue ? 0 : -90))
+                    .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isExpanded.wrappedValue)
             }
             .contentShape(Rectangle())
         }
@@ -64,6 +65,8 @@ extension View {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 16))
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.35))
+                    .scaleEffect(isSelected ? 1.05 : 1.0)
+                    .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isSelected)
                 Text(title)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)

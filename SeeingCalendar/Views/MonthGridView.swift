@@ -182,12 +182,14 @@ struct MonthGridView: View, Equatable {
             let row = index / 7
             let column = index % 7
             RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .shadow(color: Color.accentColor.opacity(0.18), radius: 4, x: 0, y: 1)
                 .frame(width: cellWidth, height: cellWidth)
                 .offset(x: CGFloat(column) * (cellWidth + spacing),
                         y: weekdayHeaderHeight + spacing + CGFloat(row) * (cellWidth + spacing))
                 .allowsHitTesting(false)
                 .transition(.opacity)
+                .animation(.spring(response: 0.22, dampingFraction: 0.82), value: selectedDate)
         }
     }
 

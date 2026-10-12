@@ -31,6 +31,7 @@ struct DayEditorView: View {
     @State private var isAddShapePresented = false
     /// 顶部标签行 / 页条下拉返回的进行中标记。
     @State private var isPullDownDismissing = false
+    @Namespace private var pageStripNamespace
 
     init(day: DayRecord,
          workspace: Workspace,
@@ -70,10 +71,11 @@ struct DayEditorView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 pageStrip(model: model)
-                Divider()
+                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 CanvasRepresentable(model: model)
                     .overlay(alignment: .top) { hintBanner(model: model) }
-                Divider()
+                    .animation(.spring(response: 0.22, dampingFraction: 0.84), value: model.selectionKind != .none)
+                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 toolBar(model: model)
             }
             .background(Color(uiColor: .systemGroupedBackground))
@@ -214,27 +216,41 @@ struct DayEditorView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Array(model.pages.enumerated()), id: \.element.uuid) { index, page in
+                    let isSelected = model.pageIndex == index
                     Button {
-                        model.selectPage(index)
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+                            model.selectPage(index)
+                        }
                     } label: {
                         HStack(spacing: 4) {
                             Text("Page \(index + 1)")
-                                .font(.system(size: 12, weight: model.pageIndex == index ? .semibold : .regular))
+                                .font(.system(size: 12, weight: isSelected ? .semibold : .regular, design: .rounded))
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                             if index == 0 {
                                 Image(systemName: "square.grid.2x2")
                                     .font(.system(size: 9))
+                                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                             }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(
-                            Capsule().fill(model.pageIndex == index
-                                           ? Color.accentColor.opacity(0.18)
-                                           : Color(uiColor: .secondarySystemBackground))
-                        )
-                        .overlay(
-                            Capsule().strokeBorder(model.pageIndex == index ? Color.accentColor : .clear, lineWidth: 1)
-                        )
+                        .background {
+                            if isSelected {
+                                Capsule()
+                                    .fill(Color.accentColor.opacity(0.16))
+                                    .matchedGeometryEffect(id: "activePageCapsule", in: pageStripNamespace)
+                            } else {
+                                Capsule()
+                                    .fill(Color(uiColor: .secondarySystemBackground))
+                            }
+                        }
+                        .overlay {
+                            if isSelected {
+                                Capsule()
+                                    .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+                                    .matchedGeometryEffect(id: "activePageBorder", in: pageStripNamespace)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(page.index == 0 ? "月历封面页" : "第 \(index + 1) 页")
@@ -291,12 +307,16 @@ struct DayEditorView: View {
     private func hintBanner(model: EditorModel) -> some View {
         if model.selectionKind != .none {
             Text(hintText(for: model.selectionKind))
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                )
                 .padding(.top, 8)
                 .allowsHitTesting(false)
+                .transition(.scale(scale: 0.94).combined(with: .opacity))
         }
     }
 
@@ -505,7 +525,7 @@ struct DayEditorView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color(uiColor: .systemBackground))
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
     }
 
     @ViewBuilder
