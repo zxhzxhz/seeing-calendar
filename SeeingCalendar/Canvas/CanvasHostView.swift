@@ -17,6 +17,11 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     var onPencilSwitchTool: (() -> Void)?
     var onPencilShowPalette: (() -> Void)?
 
+    /// 画布左右边缘双击快捷切换回调
+    var onEdgeDoubleTap: ((CanvasEdgeSide) -> Void)?
+    var isLeftEdgeEnabled: Bool = false
+    var isRightEdgeEnabled: Bool = false
+
     private var pullDownEngaged = false
 
     private lazy var pullDown: UIPanGestureRecognizer = {
@@ -48,6 +53,65 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// 该点是否落在画纸（可绘画区域）内。
     func isInsidePaper(_ point: CGPoint) -> Bool {
         canvas.bounds.contains(canvas.convert(point, from: self))
+    }
+
+    /// 获取当前画纸在宿主视图（屏幕坐标）中的矩形区域
+    var paperFrameInHost: CGRect {
+        canvas.convert(canvas.bounds, to: self)
+    }
+
+    /// 左侧感应区：屏幕左侧至画纸左边缘之间的留白区域
+    /// 动态防误触：画纸放大致使左侧留白收窄至 <= 8pt 时自动停用
+    func isInsideLeftHotZone(_ point: CGPoint) -> Bool {
+        guard bounds.width > 0, bounds.height > 0 else { return false }
+        let paperFrame = paperFrameInHost
+        guard paperFrame.minX > 8 else { return false }
+        return point.x >= 0 && point.x < paperFrame.minX && point.y >= 0 && point.y <= bounds.height
+    }
+
+    /// 右侧感应区：画纸右边缘至屏幕右边界之间的留白区域
+    /// 动态防误触：画纸放大致使右侧留白收窄至 <= 8pt 时自动停用
+    func isInsideRightHotZone(_ point: CGPoint) -> Bool {
+        guard bounds.width > 0, bounds.height > 0 else { return false }
+        let paperFrame = paperFrameInHost
+        guard paperFrame.maxX < bounds.width - 8 else { return false }
+        return point.x > paperFrame.maxX && point.x <= bounds.width && point.y >= 0 && point.y <= bounds.height
+    }
+
+    private lazy var leftEdgeDoubleTap: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(handleLeftEdgeDoubleTap(_:)))
+        gesture.numberOfTouchesRequired = 1
+        gesture.numberOfTapsRequired = 2
+        gesture.cancelsTouchesInView = false
+        gesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        gesture.delegate = self
+        return gesture
+    }()
+
+    private lazy var rightEdgeDoubleTap: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(handleRightEdgeDoubleTap(_:)))
+        gesture.numberOfTouchesRequired = 1
+        gesture.numberOfTapsRequired = 2
+        gesture.cancelsTouchesInView = false
+        gesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        gesture.delegate = self
+        return gesture
+    }()
+
+    @objc private func handleLeftEdgeDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        let point = gesture.location(in: self)
+        guard isInsideLeftHotZone(point) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onEdgeDoubleTap?(.left)
+    }
+
+    @objc private func handleRightEdgeDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended else { return }
+        let point = gesture.location(in: self)
+        guard isInsideRightHotZone(point) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onEdgeDoubleTap?(.right)
     }
 
     private var didPerformInitialFit = false
@@ -108,6 +172,10 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         threeFingerTap.cancelsTouchesInView = false
         threeFingerTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         addGestureRecognizer(threeFingerTap)
+
+        // 4. 画布边缘双击快捷切换工具（单指双击）
+        addGestureRecognizer(leftEdgeDoubleTap)
+        addGestureRecognizer(rightEdgeDoubleTap)
     }
 
     /// 触控策略同步：当关闭手指书写时，手指负责平移画布（单指即可平移，双指缩放）；
@@ -244,12 +312,27 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     /// 下拉返回只在「画纸之外」起手、且以向下为主时才开始识别。
     /// 注意：UIView 自身已实现 `gestureRecognizerShouldBegin`（UIKit 内部扩展），必须写 override。
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === pullDown,
-              let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        guard !isInsidePaper(pan.location(in: self)) else { return false }
-        let velocity = pan.velocity(in: self)
-        guard velocity.y > abs(velocity.x) else { return false }
-        pullDownEngaged = true
+        if gestureRecognizer === pullDown {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+            guard !isInsidePaper(pan.location(in: self)) else { return false }
+            let velocity = pan.velocity(in: self)
+            guard velocity.y > abs(velocity.x) else { return false }
+            pullDownEngaged = true
+            return true
+        }
+
+        if gestureRecognizer === leftEdgeDoubleTap {
+            guard isLeftEdgeEnabled else { return false }
+            let point = gestureRecognizer.location(in: self)
+            return isInsideLeftHotZone(point)
+        }
+
+        if gestureRecognizer === rightEdgeDoubleTap {
+            guard isRightEdgeEnabled else { return false }
+            let point = gestureRecognizer.location(in: self)
+            return isInsideRightHotZone(point)
+        }
+
         return true
     }
 

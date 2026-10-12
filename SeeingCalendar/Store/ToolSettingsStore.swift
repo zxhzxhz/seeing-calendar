@@ -22,6 +22,7 @@ struct ToolSettingsStore {
         static let penWidth = "editorTool.penWidth"
         static let eraserMode = "editorTool.eraserMode"
         static let eraserWidth = "editorTool.eraserWidth"
+        static let edgeDoubleTapSettings = "editorTool.edgeDoubleTapSettings"
 
         static func penColor(_ tool: CanvasTool) -> String {
             "editorTool.penColor.\(tool.rawValue)"
@@ -109,6 +110,23 @@ struct ToolSettingsStore {
         nonmutating set {
             guard let value = newValue, eraserWidthRange.contains(value) else { return }
             defaults.set(value, forKey: Key.eraserWidth)
+        }
+    }
+
+    // MARK: - 边缘双击快捷切换
+
+    var edgeDoubleTapSettings: EdgeDoubleTapSettings {
+        get {
+            guard let data = defaults.data(forKey: Key.edgeDoubleTapSettings),
+                  let decoded = try? JSONDecoder().decode(EdgeDoubleTapSettings.self, from: data) else {
+                return EdgeDoubleTapSettings()
+            }
+            return decoded
+        }
+        nonmutating set {
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                defaults.set(encoded, forKey: Key.edgeDoubleTapSettings)
+            }
         }
     }
 

@@ -71,23 +71,10 @@ struct AddShapeSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("效果预览") {
-                    HStack {
-                        Spacer()
-                        ShapeRealPreviewView(
-                            shape: selectedShape,
-                            strokeColor: Color(hex: strokeColorHex),
-                            strokeWidth: strokeWidth,
-                            fillType: fillType,
-                            fillColor: Color(hex: fillColorHex),
-                            opacity: opacity
-                        )
-                        .frame(width: 160, height: 160)
-                        .padding(.vertical, 8)
-                        Spacer()
-                    }
-                }
+            VStack(spacing: 0) {
+                pinnedPreview
+
+                Form {
 
                 Section("形状类型") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 10)], spacing: 10) {
@@ -178,6 +165,7 @@ struct AddShapeSheet: View {
                     }
                 }
             }
+        }
             .navigationTitle(initialConfig == nil ? "添加形状" : "编辑形状")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -192,6 +180,25 @@ struct AddShapeSheet: View {
                 }
             }
         }
+    }
+
+    private var pinnedPreview: some View {
+        VStack(spacing: 0) {
+            ShapeRealPreviewView(
+                shape: selectedShape,
+                strokeColor: Color(hex: strokeColorHex),
+                strokeWidth: strokeWidth,
+                fillType: fillType,
+                fillColor: Color(hex: fillColorHex),
+                opacity: opacity
+            )
+            .frame(width: 150, height: 150)
+            .padding(.vertical, 14)
+
+            Divider()
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
     }
 
     private func presetWidthButton(title: String, width: CGFloat) -> some View {

@@ -29,6 +29,7 @@ struct DayEditorView: View {
     @State private var isAddStickerPresented = false
     @State private var isAddSignaturePresented = false
     @State private var isAddShapePresented = false
+    @State private var isEdgeDoubleTapSettingsPresented = false
     @Namespace private var pageStripNamespace
 
     init(day: DayRecord,
@@ -156,6 +157,13 @@ struct DayEditorView: View {
                     model.updateEditedItem(id: id, data: data, payload: .shape(config))
                 }
             }
+        }
+        .sheet(isPresented: $isEdgeDoubleTapSettingsPresented) {
+            EdgeDoubleTapSettingsSheet(settings: model.edgeDoubleTapSettings) { newSettings in
+                model.updateEdgeDoubleTapSettings(newSettings)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: $isClearConfirmPresented, titleVisibility: .visible) {
             Button("清空当前页", role: .destructive) { model.clearPage() }
@@ -779,6 +787,14 @@ struct DayEditorView: View {
 
         ToolbarItemGroup(placement: .topBarTrailing) {
             Menu {
+                Section("手势与快捷操作") {
+                    Button {
+                        isEdgeDoubleTapSettingsPresented = true
+                    } label: {
+                        Label("边缘双击快捷切换", systemImage: "hand.tap")
+                    }
+                }
+
                 Section("插入贴图") {
                     Button {
                         isPhotoPickerRequested = true

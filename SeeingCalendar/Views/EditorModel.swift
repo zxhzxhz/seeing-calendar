@@ -175,6 +175,23 @@ final class EditorModel {
     /// 橡皮有效范围直径（画布世界坐标）；同时决定 PKEraserTool.width 与指示圈直径。
     var eraserWidth: CGFloat = 26
 
+    // 边缘双击快捷切换
+    var edgeDoubleTapSettings: EdgeDoubleTapSettings = EdgeDoubleTapSettings()
+    var previousToolType: EdgeSwitchTargetTool = .eraser
+    private var savedToolBeforeDesignated: EdgeSwitchTargetTool = .pen
+
+    var currentActiveToolType: EdgeSwitchTargetTool {
+        if isLassoActive { return .lasso }
+        switch activeTool {
+        case .eraser: return .eraser
+        case .pen: return .pen
+        case .monoline: return .monoline
+        case .marker: return .marker
+        case .pencil: return .pencil
+        case nil: return .pen
+        }
+    }
+
     weak var canvasHost: CanvasHostView?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     /// 已下发的工具指纹：与期望指纹不一致时才重新下发。
@@ -202,6 +219,7 @@ final class EditorModel {
         adoptPenSettings(for: currentInkTool)
         if let mode = settings.eraserMode { eraserMode = mode }
         if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
+        edgeDoubleTapSettings = settings.edgeDoubleTapSettings
     }
 
     /// 换上台面指定笔自己的墨色与笔宽（每支笔独立记忆）。
@@ -299,6 +317,11 @@ final class EditorModel {
         host.onPencilShowPalette = { [weak self] in
             self?.onRequestToggleColorPicker?()
         }
+        host.onEdgeDoubleTap = { [weak self] side in
+            self?.handleEdgeDoubleTap(side: side)
+        }
+        host.isLeftEdgeEnabled = edgeDoubleTapSettings.left.isEnabled
+        host.isRightEdgeEnabled = edgeDoubleTapSettings.right.isEnabled
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         host.canvas.isLassoActive = isLassoActive
         appliedToolSignature = ""          // 强制首次下发
@@ -317,6 +340,12 @@ final class EditorModel {
 
     func syncUIKitState(of host: CanvasHostView?) {
         guard let host else { return }
+        if host.isLeftEdgeEnabled != edgeDoubleTapSettings.left.isEnabled {
+            host.isLeftEdgeEnabled = edgeDoubleTapSettings.left.isEnabled
+        }
+        if host.isRightEdgeEnabled != edgeDoubleTapSettings.right.isEnabled {
+            host.isRightEdgeEnabled = edgeDoubleTapSettings.right.isEnabled
+        }
         if host.canvas.isFingerDrawingEnabled != isFingerDrawingEnabled {
             host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         }
@@ -613,6 +642,7 @@ final class EditorModel {
     /// 笔刷 / 自动铅笔 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
     /// 同时把目标笔的专属墨色与笔宽换上台面。
     func select(tool: CanvasTool) {
+        let prev = currentActiveToolType
         if isLassoActive {
             isLassoActive = false
         }
@@ -620,6 +650,12 @@ final class EditorModel {
         let next: CanvasTool? = (activeTool == tool) ? nil : tool
         adoptPenSettings(for: tool)
         activeTool = next
+        if let nextTool = next {
+            let nextTarget = EdgeSwitchTargetTool(rawValue: nextTool.rawValue) ?? .pen
+            if nextTarget != prev {
+                previousToolType = prev
+            }
+        }
         applyToolImmediately()
     }
 
@@ -680,7 +716,81 @@ final class EditorModel {
 
     /// 套索 —— 与笔墨工具互斥。
     func toggleLasso() {
+        let prev = currentActiveToolType
         isLassoActive.toggle()
+        if isLassoActive && prev != .lasso {
+            previousToolType = prev
+        } else if !isLassoActive {
+            previousToolType = .lasso
+        }
+    }
+
+    // MARK: - 边缘双击快捷切换
+
+    func updateEdgeDoubleTapSettings(_ newSettings: EdgeDoubleTapSettings) {
+        edgeDoubleTapSettings = newSettings
+        settings.edgeDoubleTapSettings = newSettings
+        syncEdgeDoubleTapState()
+    }
+
+    func syncEdgeDoubleTapState() {
+        guard let host = canvasHost else { return }
+        host.isLeftEdgeEnabled = edgeDoubleTapSettings.left.isEnabled
+        host.isRightEdgeEnabled = edgeDoubleTapSettings.right.isEnabled
+    }
+
+    func handleEdgeDoubleTap(side: CanvasEdgeSide) {
+        let config = (side == .left ? edgeDoubleTapSettings.left : edgeDoubleTapSettings.right)
+        guard config.isEnabled else { return }
+
+        switch config.mode {
+        case .switchToPrevious:
+            let current = currentActiveToolType
+            let target = (previousToolType != current) ? previousToolType : (current == .eraser ? .pen : .eraser)
+            previousToolType = current
+            switchTo(target: target)
+            toastMessage = "已切换至\(target.title)"
+
+        case .switchToDesignated:
+            let current = currentActiveToolType
+            let designated = config.designatedTool
+            if current != designated {
+                savedToolBeforeDesignated = current
+                previousToolType = current
+                switchTo(target: designated)
+                toastMessage = "已切换至\(designated.title)"
+            } else {
+                // 再次双击切回原工具
+                let returnTool = (savedToolBeforeDesignated != designated) ? savedToolBeforeDesignated : .pen
+                previousToolType = current
+                switchTo(target: returnTool)
+                toastMessage = "已切回\(returnTool.title)"
+            }
+        }
+    }
+
+    func switchTo(target: EdgeSwitchTargetTool) {
+        switch target {
+        case .lasso:
+            if !isLassoActive {
+                isLassoActive = true
+            }
+        case .eraser:
+            if isLassoActive { isLassoActive = false }
+            select(tool: .eraser)
+        case .pen:
+            if isLassoActive { isLassoActive = false }
+            select(tool: .pen)
+        case .monoline:
+            if isLassoActive { isLassoActive = false }
+            select(tool: .monoline)
+        case .marker:
+            if isLassoActive { isLassoActive = false }
+            select(tool: .marker)
+        case .pencil:
+            if isLassoActive { isLassoActive = false }
+            select(tool: .pencil)
+        }
     }
 
     /// 「最大化 / 缩小」画布视口。
