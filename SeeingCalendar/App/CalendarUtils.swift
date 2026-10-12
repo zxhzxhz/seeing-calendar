@@ -99,7 +99,7 @@ enum CalendarUtils {
     // MARK: - 月历矩阵（固定 6 行 × 7 列 = 42 格，保证布局零抖动）
 
     private static let gridDatesLock = NSLock()
-    private static var gridDatesCache: [String: [Date]] = [:]
+    nonisolated(unsafe) private static var gridDatesCache: [String: [Date]] = [:]
 
     static func gridDates(forMonthContaining date: Date) -> [Date] {
         let first = startOfMonth(date)

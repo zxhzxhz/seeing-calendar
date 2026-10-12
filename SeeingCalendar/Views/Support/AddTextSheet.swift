@@ -61,7 +61,7 @@ struct AddTextSheet: View {
                 }
             }
 
-            var weight: UIFont.Weight = isBold ? .bold : .regular
+            let weight: UIFont.Weight = isBold ? .bold : .regular
             let base = UIFont.systemFont(ofSize: size, weight: weight)
             guard let descriptor = base.fontDescriptor.withDesign(descriptorDesign) else {
                 return base
