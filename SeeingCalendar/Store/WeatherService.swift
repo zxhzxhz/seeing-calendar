@@ -16,11 +16,23 @@ struct WeatherInfo: Codable, Sendable {
         WeatherService.wmoDescription(for: weatherCode)
     }
 
+    /// 匹配 Apple HIG 的 SF Symbol 天气图标
+    var systemSymbol: String {
+        WeatherService.wmoSymbol(for: weatherCode)
+    }
+
     /// 按照需求格式化：天气{晴/多云/暴雨等} 气温{min}~{max}摄氏度
     var formattedWeatherSegment: String {
         let minRounded = Int(tempMin.rounded())
         let maxRounded = Int(tempMax.rounded())
         return "天气\(conditionDescription) 气温\(minRounded)~\(maxRounded)摄氏度"
+    }
+
+    /// 优雅的 HIG 紧凑摘要：晴 · 18°~30°C
+    var compactSummary: String {
+        let minRounded = Int(tempMin.rounded())
+        let maxRounded = Int(tempMax.rounded())
+        return "\(conditionDescription) · \(minRounded)°~\(maxRounded)℃"
     }
 }
 
@@ -336,6 +348,23 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         case 95: return "雷阵雨"
         case 96, 99: return "雷雨伴冰雹"
         default: return "晴"
+        }
+    }
+
+    nonisolated static func wmoSymbol(for code: Int) -> String {
+        switch code {
+        case 0: return "sun.max.fill"
+        case 1: return "sun.min.fill"
+        case 2: return "cloud.sun.fill"
+        case 3: return "cloud.fill"
+        case 45, 48: return "cloud.fog.fill"
+        case 51, 53, 55, 56, 57: return "cloud.drizzle.fill"
+        case 61, 63, 65, 66, 67: return "cloud.rain.fill"
+        case 71, 73, 75, 77: return "cloud.snow.fill"
+        case 80, 81, 82: return "cloud.heavyrain.fill"
+        case 85, 86: return "cloud.snow.fill"
+        case 95, 96, 99: return "cloud.bolt.rain.fill"
+        default: return "sun.max.fill"
         }
     }
 }

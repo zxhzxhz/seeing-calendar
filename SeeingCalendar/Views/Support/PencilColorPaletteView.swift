@@ -24,7 +24,7 @@ struct PencilColorPaletteView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             // 1~5 槽位：固定预设颜色
             ForEach(Self.presetColors, id: \.hex) { item in
                 let isSelected = item.hex.caseInsensitiveCompare(selectedHex) == .orderedSame
@@ -33,7 +33,7 @@ struct PencilColorPaletteView: View {
                 } label: {
                     Circle()
                         .fill(Color(hex: item.hex))
-                        .frame(width: 26, height: 26)
+                        .frame(width: 28, height: 28)
                         .overlay(
                             Circle()
                                 .strokeBorder(Color.white, lineWidth: isSelected ? 2 : 0)

@@ -109,16 +109,19 @@ struct SubscriptionsView: View {
                                          workspaces: workspaces,
                                          isExpanded: $isNewScopeExpanded)
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             ForEach(SubscriptionPalette.colors, id: \.self) { hex in
                                 Circle()
                                     .fill(Color(hex: hex))
-                                    .frame(width: 22, height: 22)
+                                    .frame(width: 26, height: 26)
                                     .overlay(Circle().strokeBorder(newColor == hex ? Color.primary : .clear, lineWidth: 2))
+                                    .scaleEffect(newColor == hex ? 1.15 : 1.0)
+                                    .animation(.spring(response: 0.22, dampingFraction: 0.75), value: newColor == hex)
                                     .onTapGesture { newColor = hex }
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 2)
                     }
                     Button {
                         addSubscription()
@@ -175,6 +178,7 @@ struct SubscriptionsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
             .sheet(item: $editingSubscription) { target in

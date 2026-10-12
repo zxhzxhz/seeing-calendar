@@ -324,7 +324,7 @@ struct RootView: View {
             Button("今天") {
                 goToToday(containerWidth: containerWidth)
             }
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
             .buttonStyle(.bordered)
             .controlSize(.small)
 
@@ -340,12 +340,12 @@ struct RootView: View {
                 fingerDrawingEnabled.toggle()
             } label: {
                 Image(systemName: fingerDrawingEnabled ? "hand.draw.fill" : "hand.draw")
-                    .font(.system(size: 16))
+                    .font(.system(size: 15))
                     .foregroundStyle(fingerDrawingEnabled ? Color.accentColor : .primary)
                     .frame(width: 32, height: 32)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(fingerDrawingEnabled ? Color.accentColor.opacity(0.15) : .clear)
+                            .fill(fingerDrawingEnabled ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill).opacity(0.6))
                     )
             }
             .accessibilityLabel("手指书写开关")
@@ -353,14 +353,26 @@ struct RootView: View {
             Button {
                 showSubscriptions = true
             } label: {
-                Image(systemName: "calendar.badge.plus").font(.system(size: 16))
+                Image(systemName: "calendar.badge.plus")
+                    .font(.system(size: 15))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(uiColor: .tertiarySystemFill).opacity(0.6))
+                    )
             }
             .accessibilityLabel("订阅与维度")
 
             Button {
                 showBackup = true
             } label: {
-                Image(systemName: "externaldrive").font(.system(size: 16))
+                Image(systemName: "externaldrive")
+                    .font(.system(size: 15))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(uiColor: .tertiarySystemFill).opacity(0.6))
+                    )
             }
             .accessibilityLabel("备份与恢复")
         }

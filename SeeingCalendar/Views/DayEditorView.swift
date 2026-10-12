@@ -113,9 +113,13 @@ struct DayEditorView: View {
         }
         .sheet(isPresented: $isPageManagerPresented) {
             PageManagerSheet(model: model)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isWeatherSheetPresented) {
             WeatherLocationSheet(date: model.date)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isAddTextPresented) {
             AddTextSheet { data, config in
@@ -309,80 +313,118 @@ struct DayEditorView: View {
     // MARK: - 工具栏
 
     private func toolBar(model: EditorModel) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             // 模式级动作（裁剪 / 变形）放在底部工具条：不遮挡任何手柄。
             contextualActions(model: model)
 
-            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+            // 撤销 / 重做组
+            HStack(spacing: 2) {
+                Button { model.undo() } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 14))
+                        .frame(width: 32, height: 32)
+                }
                 .disabled(!model.canUndo)
-            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+
+                Button { model.redo() } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                        .font(.system(size: 14))
+                        .frame(width: 32, height: 32)
+                }
                 .disabled(!model.canRedo)
+            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemFill).opacity(0.5))
+            )
 
-            Divider().frame(height: 22)
+            Divider().frame(height: 20)
 
-            ForEach(CanvasTool.allCases) { tool in
+            // 画笔工具组
+            HStack(spacing: 4) {
+                ForEach(CanvasTool.allCases) { tool in
+                    let isSelected = model.activeTool == tool && !model.isLassoActive
+                    Button {
+                        model.select(tool: tool)
+                    } label: {
+                        Image(systemName: tool.symbol)
+                            .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+                            )
+                    }
+                    .accessibilityLabel(tool.title + "（再次点按可取消）")
+                }
+
                 Button {
-                    model.select(tool: tool)
+                    isColorPickerPresented.toggle()
                 } label: {
-                    Image(systemName: tool.symbol)
-                        .font(.system(size: 16))
-                        .frame(width: 30, height: 30)
+                    if model.activeTool == .eraser {
+                        Image(systemName: model.eraserMode.symbol)
+                            .font(.system(size: 14))
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(Color.primary)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(Color(uiColor: .tertiarySystemFill).opacity(0.6))
+                            )
+                    } else {
+                        Circle()
+                            .fill(Color(hex: model.penColorHex, fallback: .blue))
+                            .frame(width: 20, height: 20)
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 1.5))
+                            .frame(width: 34, height: 34)
+                    }
+                }
+                .accessibilityLabel(model.activeTool == .eraser ? "橡皮设置" : "墨色与笔宽")
+                .popover(isPresented: $isColorPickerPresented, arrowEdge: .bottom) {
+                    penSettings(model: model)
+                }
+            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemFill).opacity(0.4))
+            )
+
+            Divider().frame(height: 20)
+
+            // 套索与触控
+            HStack(spacing: 4) {
+                Button {
+                    model.toggleLasso()
+                } label: {
+                    Image(systemName: "lasso")
+                        .font(.system(size: 15, weight: model.isLassoActive ? .semibold : .regular))
+                        .frame(width: 34, height: 34)
+                        .foregroundStyle(model.isLassoActive ? Color.accentColor : Color.primary)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(model.activeTool == tool && !model.isLassoActive
-                                      ? Color.accentColor.opacity(0.18)
-                                      : .clear)
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(model.isLassoActive ? Color.accentColor.opacity(0.20) : Color.clear)
                         )
                 }
-                .accessibilityLabel(tool.title + "（再次点按可取消）")
-            }
+                .accessibilityLabel("统一套索")
 
-            Button {
-                isColorPickerPresented.toggle()
-            } label: {
-                if model.activeTool == .eraser {
-                    Image(systemName: model.eraserMode.symbol)
+                Button {
+                    model.isFingerDrawingEnabled.toggle()
+                } label: {
+                    Image(systemName: model.isFingerDrawingEnabled ? "hand.draw.fill" : "hand.draw")
                         .font(.system(size: 15))
-                } else {
-                    Circle()
-                        .fill(Color(hex: model.penColorHex, fallback: .blue))
-                        .frame(width: 18, height: 18)
-                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 1))
+                        .frame(width: 34, height: 34)
+                        .foregroundStyle(model.isFingerDrawingEnabled ? Color.accentColor : Color.primary)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(model.isFingerDrawingEnabled ? Color.accentColor.opacity(0.20) : Color.clear)
+                        )
                 }
-            }
-            .accessibilityLabel(model.activeTool == .eraser ? "橡皮设置" : "墨色与笔宽")
-            .popover(isPresented: $isColorPickerPresented, arrowEdge: .bottom) {
-                penSettings(model: model)
+                .accessibilityLabel("手指书写开关")
             }
 
-            Divider().frame(height: 22)
-
-            Button {
-                model.toggleLasso()
-            } label: {
-                Image(systemName: "lasso")
-                    .font(.system(size: 16))
-                    .frame(width: 30, height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(model.isLassoActive ? Color.accentColor.opacity(0.20) : .clear)
-                    )
-            }
-            .accessibilityLabel("统一套索")
-
-            Button {
-                model.isFingerDrawingEnabled.toggle()
-            } label: {
-                Image(systemName: model.isFingerDrawingEnabled ? "hand.draw.fill" : "hand.draw")
-                    .font(.system(size: 16))
-                    .frame(width: 30, height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(model.isFingerDrawingEnabled ? Color.accentColor.opacity(0.20) : .clear)
-                    )
-            }
-            .accessibilityLabel("手指书写开关")
-
+            // 添加元素菜单
             Menu {
                 Button {
                     isAddTextPresented = true
@@ -417,10 +459,11 @@ struct DayEditorView: View {
                 }
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(Color.primary)
                     .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(Color(uiColor: .tertiarySystemFill))
                     )
             }
@@ -430,12 +473,18 @@ struct DayEditorView: View {
 
             if model.isLassoActive {
                 Text("套索")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
             } else if model.isNavigating {
                 Text("导航")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
             }
 
             Button {
@@ -445,10 +494,11 @@ struct DayEditorView: View {
                       ? "arrow.down.right.and.arrow.up.left"
                       : "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 15))
-                    .frame(width: 30, height: 30)
+                    .frame(width: 34, height: 34)
+                    .foregroundStyle(model.isCanvasExpanded ? Color.accentColor : Color.primary)
                     .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(model.isCanvasExpanded ? Color.accentColor.opacity(0.18) : .clear)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(model.isCanvasExpanded ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill).opacity(0.6))
                     )
             }
             .accessibilityLabel(model.isCanvasExpanded ? "缩小画布" : "最大化画布")
@@ -490,47 +540,76 @@ struct DayEditorView: View {
     }
 
     private func eraserSettings(model: EditorModel) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("橡皮模式").font(.headline)
-            ForEach(EraserMode.allCases) { mode in
-                Button {
-                    model.updateEraserMode(mode)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: mode.symbol)
-                            .frame(width: 22)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(mode.title)
-                                .font(.system(size: 13, weight: .semibold))
-                            Text(mode.detail)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                ForEach(EraserMode.allCases) { mode in
+                    let isSelected = model.eraserMode == mode
+                    Button {
+                        model.updateEraserMode(mode)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: mode.symbol)
+                                .font(.system(size: 15))
+                                .frame(width: 24)
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mode.title)
+                                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                                Text(mode.detail)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if isSelected {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.accentColor)
+                            }
                         }
-                        Spacer(minLength: 0)
-                        if model.eraserMode == mode {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accentColor)
-                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(uiColor: .tertiarySystemFill).opacity(0.4))
+                        )
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             Divider()
 
-            Text("橡皮大小 \(Int(model.eraserWidth)) pt")
-                .font(.subheadline)
-            Slider(value: Binding(get: { model.eraserWidth }, set: { model.updateEraserWidth($0) }),
-                   in: 8...160,
-                   step: 2)
-                .frame(width: 260)
+            HStack {
+                Text("橡皮大小")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Text("\(Int(model.eraserWidth)) pt")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                Slider(value: Binding(get: { model.eraserWidth }, set: { model.updateEraserWidth($0) }),
+                       in: 8...160,
+                       step: 2)
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 270)
+
             Text("触碰画布时会显示同等大小的空心圆圈，圈内即为擦除范围。")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .frame(width: 260, alignment: .leading)
+                .frame(width: 270, alignment: .leading)
         }
         .padding(16)
+        .frame(width: 302)
     }
 
     private func inkSettings(model: EditorModel) -> some View {
@@ -544,58 +623,78 @@ struct DayEditorView: View {
             Divider()
 
             HStack {
-                Text("不透明度").font(.subheadline)
+                Text("不透明度")
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Text("\(Int(round(model.penOpacity * 100)))%")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Slider(
-                value: Binding(get: { model.penOpacity }, set: { model.updatePenOpacity($0) }),
-                in: 0.1...1.0,
-                step: 0.05
-            )
-            .frame(width: 250)
+            HStack(spacing: 8) {
+                Image(systemName: "circle.dashed")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: Binding(get: { model.penOpacity }, set: { model.updatePenOpacity($0) }),
+                    in: 0.1...1.0,
+                    step: 0.05
+                )
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 270)
 
             Divider()
 
             HStack {
-                Text("笔宽").font(.subheadline)
+                Text("笔宽")
+                    .font(.subheadline.weight(.medium))
                 Spacer()
                 Text("\(Int(model.penWidth)) pt")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Slider(value: Binding(get: { model.penWidth }, set: { model.updatePenWidth($0) }), in: 1...28, step: 1)
-                .frame(width: 250)
+            HStack(spacing: 8) {
+                Image(systemName: "scribble")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Slider(value: Binding(get: { model.penWidth }, set: { model.updatePenWidth($0) }), in: 1...28, step: 1)
+                Image(systemName: "scribble.variable")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 270)
 
             // 固定粗细预设档位
             let presets = model.currentWidthPresets
             HStack(spacing: 8) {
                 ForEach(presets, id: \.self) { preset in
+                    let isCurrent = abs(model.penWidth - preset) < 0.5
                     Button {
                         model.updatePenWidth(preset)
                     } label: {
                         Text("\(Int(preset)) pt")
-                            .font(.system(size: 12, weight: abs(model.penWidth - preset) < 0.5 ? .bold : .regular))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
+                            .font(.system(size: 12, weight: isCurrent ? .bold : .medium, design: .rounded))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                             .background(
                                 Capsule()
-                                    .fill(abs(model.penWidth - preset) < 0.5 ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill))
+                                    .fill(isCurrent ? Color.accentColor.opacity(0.18) : Color(uiColor: .tertiarySystemFill))
                             )
                             .overlay(
                                 Capsule()
-                                    .stroke(abs(model.penWidth - preset) < 0.5 ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                                    .stroke(isCurrent ? Color.accentColor : Color.clear, lineWidth: 1.5)
                             )
-                            .foregroundStyle(abs(model.penWidth - preset) < 0.5 ? Color.accentColor : Color.primary)
+                            .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: 250, alignment: .leading)
+            .frame(width: 270, alignment: .leading)
         }
         .padding(16)
+        .frame(width: 302)
     }
 
     /// 顶部标签行 / 页条的下拉返回手势：
@@ -622,11 +721,28 @@ struct DayEditorView: View {
             Button {
                 isWeatherSheetPresented = true
             } label: {
-                HStack(spacing: 4) {
-                    Text(model.titleWithWeather)
-                        .font(.system(size: 14, weight: .semibold))
+                HStack(spacing: 6) {
+                    Text(CalendarUtils.dayTitle(model.date))
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
+
+                    if let weather = WeatherService.shared.weather(for: model.date) {
+                        HStack(spacing: 4) {
+                            Image(systemName: weather.systemSymbol)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(Color.accentColor)
+                            Text("天气\(weather.conditionDescription) 气温\(Int(weather.tempMin.rounded()))~\(Int(weather.tempMax.rounded()))℃")
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(Color.accentColor.opacity(0.12))
+                        )
+                        .foregroundStyle(Color.accentColor)
+                    }
+
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.secondary)
@@ -840,28 +956,39 @@ struct WeatherLocationSheet: View {
             List {
                 Section("当日天气") {
                     let info = weatherService.weather(for: date)
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 14) {
+                        Image(systemName: info?.systemSymbol ?? "cloud.sun.fill")
+                            .font(.system(size: 32))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 44, height: 44)
+
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(weatherService.currentLocation.displayName)
                                 .font(.headline)
                             if let info {
-                                Text("\(info.conditionDescription) · \(Int(info.tempMin.rounded()))℃ ~ \(Int(info.tempMax.rounded()))℃")
+                                Text("\(info.conditionDescription) · 气温 \(Int(info.tempMin.rounded()))℃ ~ \(Int(info.tempMax.rounded()))℃")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             } else {
-                                Text(weatherService.isFetching ? "正在拉取天气..." : "暂无缓存天气")
+                                Text(weatherService.isFetching ? "正在拉取最新天气..." : "暂无缓存天气")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
                         }
+
                         Spacer()
+
                         Button {
                             Task { await weatherService.fetchWeather(for: date) }
                         } label: {
                             Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
                         }
                         .disabled(weatherService.isFetching)
                     }
+                    .padding(.vertical, 4)
                 }
 
                 Section("位置获取方式") {
@@ -872,6 +999,7 @@ struct WeatherLocationSheet: View {
                     HStack {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("输入城市名称（如北京、上海、广州）", text: $searchText)
+                            .textFieldStyle(.plain)
                             .onSubmit {
                                 Task { await weatherService.searchCities(query: searchText) }
                             }
@@ -889,6 +1017,7 @@ struct WeatherLocationSheet: View {
                             ProgressView("正在搜索...")
                             Spacer()
                         }
+                        .padding(.vertical, 8)
                     } else if !weatherService.searchResults.isEmpty {
                         ForEach(weatherService.searchResults) { loc in
                             Button {
@@ -896,10 +1025,20 @@ struct WeatherLocationSheet: View {
                                 Task { await weatherService.fetchWeather(for: date) }
                             } label: {
                                 HStack {
-                                    Text(loc.displayName)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(loc.name)
+                                            .font(.body)
+                                        if let admin = loc.admin1, admin != loc.name {
+                                            Text(admin)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                     Spacer()
                                     if weatherService.currentLocation.id == loc.id {
-                                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(Color.accentColor)
                                     }
                                 }
                             }
@@ -913,6 +1052,7 @@ struct WeatherLocationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
             .task {

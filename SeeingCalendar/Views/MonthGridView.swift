@@ -165,9 +165,10 @@ struct MonthGridView: View, Equatable {
     private var weekdayHeader: some View {
         HStack(spacing: spacing) {
             ForEach(CalendarUtils.weekdaySymbols, id: \.self) { symbol in
+                let isWeekend = symbol == "六" || symbol == "日"
                 Text(symbol)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11.5, weight: isWeekend ? .bold : .semibold, design: .rounded))
+                    .foregroundStyle(isWeekend ? Color.orange.opacity(0.88) : Color.secondary)
                     .frame(width: cellWidth, height: weekdayHeaderHeight)
             }
         }
