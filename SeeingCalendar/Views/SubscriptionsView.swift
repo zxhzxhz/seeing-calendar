@@ -22,6 +22,7 @@ struct SubscriptionsView: View {
     @State private var renamingWorkspace: Workspace?
     @State private var renameText = ""
     @State private var provider = BundledHolidayProvider.shared
+    @State private var isRefreshingAll = false
 
     /// 展示顺序：用户自建在上、内置凭据恒定居底（规则见 `ICSSubscription.displayOrder`）。
     ///
@@ -58,10 +59,10 @@ struct SubscriptionsView: View {
                 } header: {
                     Text("订阅源（\(subscriptions.count)）")
                 } footer: {
-                    Text("订阅作用域可设为全局（所有维度可见），也可多选具体维度。ICS 内容只以微型胶囊/彩点呈现，不干扰手绘主视觉。点按自建订阅可改名称与作用域；两条内置凭据固定置底、不可删除 —— 不想用请关掉它的开关。")
+                    Text("点按自建订阅可修改配置；关闭开关可停用内置节假日。")
                 }
 
-                // 内置假期凭据：本地优先（随包发行，冷启动零网络即可正确着色），可联网取最新版。
+                // 内置假期凭据：本地优先（随包发行，冷启动零网络即可正确着色），随日程刷新自动同步。
                 Section {
                     LabeledContent("数据来源") {
                         Text(provider.originText)
@@ -76,32 +77,15 @@ struct SubscriptionsView: View {
                             Text(stamp).foregroundStyle(.secondary)
                         }
                     }
-                    Button {
-                        Task { await syncHolidays() }
-                    } label: {
-                        HStack {
-                            Label("从上游更新假期数据", systemImage: "arrow.triangle.2.circlepath")
-                            Spacer()
-                            if provider.isSyncing {
-                                ProgressView().controlSize(.small)
-                            }
-                        }
-                    }
-                    .disabled(provider.isSyncing)
-                    if let error = provider.lastSyncError {
-                        Text("更新失败：\(error)。已保留本地数据。")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
                 } header: {
                     Text("中国节假日（内置）")
                 } footer: {
-                    Text("两条内置凭据默认开启：放假（holidayCal-HO）与调休补班（holidayCal-CO），覆盖 2022–2026。放假与周末用暖色样式，调休上班日与普通工作日用中性样式。更新失败时自动回落到本地数据。")
+                    Text("内置国家法定放假与调休补班数据，随日程刷新自动同步。")
                 }
 
                 Section("新增订阅") {
                     TextField("名称，例如 工作日历", text: $newName)
-                    TextField("https://example.com/calendar.ics", text: $newURL)
+                    TextField(text: $newURL, prompt: Text(verbatim: "https://example.com/calendar.ics").foregroundStyle(Color(uiColor: .placeholderText)))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -169,12 +153,23 @@ struct SubscriptionsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("刷新日程") {
+                    Button {
                         Task {
+                            isRefreshingAll = true
                             await eventStore.refresh(subscriptions: subscriptions, force: true)
-                            dismiss()
+                            await provider.syncFromUpstream()
+                            try? context.save()
+                            isRefreshingAll = false
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isRefreshingAll {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text("刷新日程")
                         }
                     }
+                    .disabled(isRefreshingAll)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
@@ -182,8 +177,8 @@ struct SubscriptionsView: View {
                 }
             }
             .sheet(item: $editingSubscription) { target in
-                SubscriptionEditorSheet(subscription: target, workspaces: workspaces) { name, scope in
-                    applyEdit(target, name: name, scope: scope)
+                SubscriptionEditorSheet(subscription: target, workspaces: workspaces) { name, url, scope in
+                    applyEdit(target, name: name, urlString: url, scope: scope)
                 }
             }
             .alert("重命名维度", isPresented: renameAlertPresented) {
@@ -222,9 +217,8 @@ struct SubscriptionsView: View {
                         HStack(spacing: 6) {
                             Text(scopeLabel(for: subscription))
                                 .lineLimit(1)
-                            if let last = subscription.lastFetched {
-                                Text("· 更新于 \(CalendarUtils.timeString(last))")
-                            }
+                            let updateDate = subscription.lastFetched ?? subscription.createdAt
+                            Text("· 更新于 \(CalendarUtils.shortDateTimeString(updateDate))")
                             if let error = subscription.lastError {
                                 Text("· \(error)")
                                     .foregroundStyle(.red)
@@ -276,7 +270,8 @@ struct SubscriptionsView: View {
         let subscription = ICSSubscription(name: name,
                                            urlString: url,
                                            colorHex: newColor,
-                                           scope: newScope)
+                                           scope: newScope,
+                                           lastFetched: .now)
         context.insert(subscription)
         try? context.save()
         newName = ""
@@ -298,19 +293,22 @@ struct SubscriptionsView: View {
         try? context.save()
     }
 
-    /// 保存订阅源的名称 / 作用域改动。
+    /// 保存订阅源的名称 / 地址 / 作用域改动。
     ///
     /// 作用域会改变 `applies(to:)` 的判定结果，改了就必须重取日程 —— 否则日格上
-    /// 还挂着按旧作用域算出来的彩点。只改名称则不必打网络：名称是活模型上的字段，
-    /// 抽屉与图例直接读它，没有需要重算的缓存。
-    private func applyEdit(_ subscription: ICSSubscription, name: String, scope: [UUID]) {
+    /// 还挂着按旧作用域算出来的彩点。改地址同样需要重新拉取日历数据。
+    private func applyEdit(_ subscription: ICSSubscription, name: String, urlString: String, scope: [UUID]) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        guard !trimmedURL.isEmpty else { return }
         let scopeChanged = Set(subscription.workspaceUUIDs) != Set(scope)
+        let urlChanged = subscription.urlString != trimmedURL
         subscription.name = trimmed
+        subscription.urlString = trimmedURL
         subscription.setScope(scope)
         try? context.save()
-        guard scopeChanged else { return }
+        guard scopeChanged || urlChanged else { return }
         Task { await eventStore.refresh(subscriptions: subscriptions, force: true) }
     }
 
@@ -365,25 +363,31 @@ private struct SubscriptionEditorSheet: View {
 
     let subscription: ICSSubscription
     let workspaces: [Workspace]
-    let onSave: (String, [UUID]) -> Void
+    let onSave: (String, String, [UUID]) -> Void
 
     @State private var name: String
+    @State private var urlString: String
     @State private var scope: [UUID]
     /// 展开状态自己持有：新增区与编辑面板各自折叠，互不影响。
     @State private var isScopeExpanded = false
 
     init(subscription: ICSSubscription,
          workspaces: [Workspace],
-         onSave: @escaping (String, [UUID]) -> Void) {
+         onSave: @escaping (String, String, [UUID]) -> Void) {
         self.subscription = subscription
         self.workspaces = workspaces
         self.onSave = onSave
         _name = State(initialValue: subscription.name)
+        _urlString = State(initialValue: subscription.urlString)
         _scope = State(initialValue: subscription.workspaceUUIDs)
     }
 
     private var trimmedName: String {
         name.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var trimmedURL: String {
+        urlString.trimmingCharacters(in: .whitespaces)
     }
 
     var body: some View {
@@ -392,20 +396,16 @@ private struct SubscriptionEditorSheet: View {
                 Section("名称") {
                     TextField("订阅名称", text: $name)
                 }
-                Section {
+                Section("订阅地址") {
+                    TextField(text: $urlString, prompt: Text(verbatim: "https://example.com/calendar.ics").foregroundStyle(Color(uiColor: .placeholderText)))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                }
+                Section("作用域") {
                     subscriptionScopeRows(scope: $scope,
                                          workspaces: workspaces,
                                          isExpanded: $isScopeExpanded)
-                    LabeledContent("地址") {
-                        Text(subscription.urlString)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                } header: {
-                    Text("作用域")
-                } footer: {
-                    Text("地址不在这里改 —— 改地址等于换一条订阅，请新建。两条内置凭据不在此面板里，它们固定置底且不可删除。")
                 }
             }
             .navigationTitle("编辑订阅源")
@@ -416,10 +416,10 @@ private struct SubscriptionEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        onSave(trimmedName, scope)
+                        onSave(trimmedName, trimmedURL, scope)
                         dismiss()
                     }
-                    .disabled(trimmedName.isEmpty)
+                    .disabled(trimmedName.isEmpty || trimmedURL.isEmpty)
                 }
             }
         }

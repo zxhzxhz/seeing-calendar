@@ -23,6 +23,8 @@ struct ToolSettingsStore {
         static let eraserMode = "editorTool.eraserMode"
         static let eraserWidth = "editorTool.eraserWidth"
         static let edgeDoubleTapSettings = "editorTool.edgeDoubleTapSettings"
+        static let lastSelectedTool = "editorTool.lastSelectedTool"
+        static let isLassoActive = "editorTool.isLassoActive"
 
         static func penColor(_ tool: CanvasTool) -> String {
             "editorTool.penColor.\(tool.rawValue)"
@@ -128,6 +130,26 @@ struct ToolSettingsStore {
                 defaults.set(encoded, forKey: Key.edgeDoubleTapSettings)
             }
         }
+    }
+
+    // MARK: - 工具/笔记忆
+    var lastSelectedTool: CanvasTool? {
+        get {
+            guard let raw = defaults.string(forKey: Key.lastSelectedTool) else { return nil }
+            return CanvasTool(rawValue: raw)
+        }
+        nonmutating set {
+            if let newValue {
+                defaults.set(newValue.rawValue, forKey: Key.lastSelectedTool)
+            } else {
+                defaults.removeObject(forKey: Key.lastSelectedTool)
+            }
+        }
+    }
+
+    var lastIsLassoActive: Bool {
+        get { defaults.bool(forKey: Key.isLassoActive) }
+        nonmutating set { defaults.set(newValue, forKey: Key.isLassoActive) }
     }
 
     // MARK: - 工具

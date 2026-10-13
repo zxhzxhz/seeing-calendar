@@ -215,11 +215,19 @@ final class EditorModel {
     /// 放在 `init` 而不是 `attach(host:)`：恢复只改模型状态，
     /// 真正的工具下发由 `attach` 里的 `appliedToolSignature = ""` 强制完成一次。
     private func restoreToolSettings() {
-        currentInkTool = .pen
+        let savedLasso = settings.lastIsLassoActive
+        let savedTool = settings.lastSelectedTool ?? .pen
+        if savedTool != .eraser {
+            currentInkTool = savedTool
+        } else {
+            currentInkTool = .pen
+        }
         adoptPenSettings(for: currentInkTool)
         if let mode = settings.eraserMode { eraserMode = mode }
         if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
         edgeDoubleTapSettings = settings.edgeDoubleTapSettings
+        isLassoActive = savedLasso
+        activeTool = savedLasso ? nil : (settings.lastSelectedTool ?? .pen)
     }
 
     /// 换上台面指定笔自己的墨色与笔宽（每支笔独立记忆）。
@@ -650,6 +658,8 @@ final class EditorModel {
         let next: CanvasTool? = (activeTool == tool) ? nil : tool
         adoptPenSettings(for: tool)
         activeTool = next
+        settings.lastSelectedTool = next
+        settings.lastIsLassoActive = false
         if let nextTool = next {
             let nextTarget = EdgeSwitchTargetTool(rawValue: nextTool.rawValue) ?? .pen
             if nextTarget != prev {
@@ -718,6 +728,7 @@ final class EditorModel {
     func toggleLasso() {
         let prev = currentActiveToolType
         isLassoActive.toggle()
+        settings.lastIsLassoActive = isLassoActive
         if isLassoActive && prev != .lasso {
             previousToolType = prev
         } else if !isLassoActive {
@@ -775,6 +786,7 @@ final class EditorModel {
             if !isLassoActive {
                 isLassoActive = true
             }
+            settings.lastIsLassoActive = true
         case .eraser:
             if isLassoActive { isLassoActive = false }
             select(tool: .eraser)

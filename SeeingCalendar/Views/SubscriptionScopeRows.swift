@@ -48,9 +48,6 @@ extension View {
                     scope.wrappedValue = SubscriptionScope.toggling(scope.wrappedValue, workspace.uuid)
                 }
             }
-            Text("只有勾选的维度会显示这条订阅的日程；「全局」＝ 所有维度可见。")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
         }
     }
 

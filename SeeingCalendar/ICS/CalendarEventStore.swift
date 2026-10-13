@@ -109,21 +109,30 @@ final class CalendarEventStore {
         var collected: [CalendarEvent] = []
         var failures: [String] = []
 
-        await withTaskGroup(of: Result<[CalendarEvent], Error>.self) { group in
+        await withTaskGroup(of: (UUID, Result<[CalendarEvent], Error>).self) { group in
             for snapshot in snapshots {
                 group.addTask {
                     do {
                         let events = try await CalendarEventStore.fetch(snapshot: snapshot, window: window)
-                        return .success(events)
+                        return (snapshot.uuid, .success(events))
                     } catch {
-                        return .failure(error)
+                        return (snapshot.uuid, .failure(error))
                     }
                 }
             }
-            for await result in group {
+            for await (uuid, result) in group {
                 switch result {
-                case .success(let list): collected.append(contentsOf: list)
-                case .failure(let error): failures.append(error.localizedDescription)
+                case .success(let list):
+                    collected.append(contentsOf: list)
+                    if let sub = subscriptions.first(where: { $0.uuid == uuid }) {
+                        sub.lastFetched = now
+                        sub.lastError = nil
+                    }
+                case .failure(let error):
+                    failures.append(error.localizedDescription)
+                    if let sub = subscriptions.first(where: { $0.uuid == uuid }) {
+                        sub.lastError = error.localizedDescription
+                    }
                 }
             }
         }

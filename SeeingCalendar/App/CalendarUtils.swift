@@ -144,6 +144,14 @@ enum CalendarUtils {
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
+    static func shortDateTimeString(_ date: Date) -> String {
+        if calendar.isDateInToday(date) {
+            return "今天 \(timeString(date))"
+        }
+        let parts = calendar.dateComponents([.month, .day, .hour, .minute], from: date)
+        return String(format: "%d月%d日 %02d:%02d", parts.month ?? 1, parts.day ?? 1, parts.hour ?? 0, parts.minute ?? 0)
+    }
+
     static func relativeLabel(for date: Date) -> String {
         if calendar.isDateInToday(date) { return "今天" }
         if calendar.isDateInYesterday(date) { return "昨天" }

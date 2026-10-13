@@ -73,8 +73,12 @@ struct DayEditorView: View {
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 CanvasRepresentable(model: model)
                     .overlay(alignment: .top) {
-                        hintBanner(model: model)
-                            .animation(.spring(response: 0.22, dampingFraction: 0.84), value: model.selectionKind != .none)
+                        VStack(spacing: 6) {
+                            toastBanner(model: model)
+                                .animation(.spring(response: 0.24, dampingFraction: 0.82), value: model.toastMessage)
+                            hintBanner(model: model)
+                                .animation(.spring(response: 0.22, dampingFraction: 0.84), value: model.selectionKind != .none)
+                        }
                     }
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                 toolBar(model: model)
@@ -172,29 +176,6 @@ struct DayEditorView: View {
         .confirmationDialog("删除当前页？该页笔迹与贴图将不可恢复。", isPresented: $isDeletePageConfirmPresented, titleVisibility: .visible) {
             Button("删除 Page \(model.pageIndex + 1)", role: .destructive) { model.deleteCurrentPage() }
             Button("取消", role: .cancel) {}
-        }
-        .overlay(alignment: .top) {
-            ZStack {
-                if let msg = model.toastMessage {
-                    Text(msg)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(Color.black.opacity(0.8)))
-                        .padding(.top, 16)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .onAppear {
-                            Task {
-                                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                                withAnimation {
-                                    model.toastMessage = nil
-                                }
-                            }
-                        }
-                }
-            }
-            .animation(.easeInOut(duration: 0.25), value: model.toastMessage)
         }
     }
 
@@ -308,7 +289,33 @@ struct DayEditorView: View {
         .simultaneousGesture(pullDownToDismiss)
     }
 
-    // MARK: - 提示条
+    // MARK: - 提示条与 Toast
+    @ViewBuilder
+    private func toastBanner(model: EditorModel) -> some View {
+        if let msg = model.toastMessage {
+            Text(msg)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.06), radius: 6, y: 2)
+                .padding(.top, 8)
+                .allowsHitTesting(false)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .onAppear {
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+                            model.toastMessage = nil
+                        }
+                    }
+                }
+        }
+    }
 
     @ViewBuilder
     private func hintBanner(model: EditorModel) -> some View {

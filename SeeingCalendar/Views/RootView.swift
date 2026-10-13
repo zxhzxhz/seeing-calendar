@@ -327,17 +327,19 @@ struct RootView: View {
                 .accessibilityLabel("下个月")
             }
 
+            let isFocusedOnToday = CalendarUtils.isSameDay(selectedDate, Date())
             Button("今天") {
                 goToToday(containerWidth: containerWidth)
             }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.accentColor)
+            .font(.system(size: 13, weight: isFocusedOnToday ? .semibold : .medium, design: .rounded))
+            .foregroundStyle(isFocusedOnToday ? Color.accentColor : Color.secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
-                Capsule().fill(Color.accentColor.opacity(0.12))
+                Capsule().fill(isFocusedOnToday ? Color.accentColor.opacity(0.12) : Color(uiColor: .tertiarySystemFill).opacity(0.45))
             )
             .buttonStyle(.plain)
+            .animation(.easeInOut(duration: 0.2), value: isFocusedOnToday)
 
             if eventStore.isRefreshing {
                 ProgressView().controlSize(.small)
@@ -374,9 +376,9 @@ struct RootView: View {
             Button {
                 showSubscriptions = true
             } label: {
-                Label("订阅与维度", systemImage: "calendar.badge.plus")
+                Label("维度与订阅", systemImage: "calendar.badge.plus")
             }
-            .accessibilityLabel("订阅与维度")
+            .accessibilityLabel("维度与订阅")
 
             Button {
                 showBackup = true
@@ -417,7 +419,7 @@ struct RootView: View {
             Button {
                 showSubscriptions = true
             } label: {
-                Label("管理维度与订阅…", systemImage: "slider.horizontal.3")
+                Label("维度与订阅…", systemImage: "slider.horizontal.3")
             }
             Divider()
             Text("版本 \(AppVersion.display)")
@@ -456,11 +458,19 @@ struct RootView: View {
         let key = CalendarUtils.key(for: today)
 
         if CalendarUtils.isSameDay(todayMonth, month) {
-            // 情况 A：今天就在当前月 → 只做选中动画 + 脉冲高亮
+            // 情况 A：今天就在当前月 → 平滑移动选中环，待焦点着陆后再荡出脉冲，避免预先在格子上闪现焦点框
+            let wasAlreadyToday = CalendarUtils.isSameDay(selectedDate, today)
             withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
                 selectedDate = today
             }
-            triggerPulse(key)
+            if wasAlreadyToday {
+                triggerPulse(key)
+            } else {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(240))
+                    triggerPulse(key)
+                }
+            }
             return
         }
 
