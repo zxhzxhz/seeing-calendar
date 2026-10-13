@@ -85,7 +85,7 @@ struct SubscriptionsView: View {
 
                 Section("新增订阅") {
                     TextField("名称，例如 工作日历", text: $newName)
-                    TextField(text: $newURL, prompt: Text(verbatim: "https://example.com/calendar.ics").foregroundStyle(Color(uiColor: .placeholderText)))
+                    TextField("订阅地址", text: $newURL, prompt: Text(verbatim: "https://example.com/calendar.ics"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -397,7 +397,7 @@ private struct SubscriptionEditorSheet: View {
                     TextField("订阅名称", text: $name)
                 }
                 Section("订阅地址") {
-                    TextField(text: $urlString, prompt: Text(verbatim: "https://example.com/calendar.ics").foregroundStyle(Color(uiColor: .placeholderText)))
+                    TextField("订阅地址", text: $urlString, prompt: Text(verbatim: "https://example.com/calendar.ics"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
