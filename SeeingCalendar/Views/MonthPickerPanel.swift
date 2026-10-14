@@ -3,7 +3,8 @@ import SwiftUI
 /// 月份选择下拉面板（顶栏年月处点开的 Drop Menu）。
 ///
 /// 形态对齐参考图：顶部「YYYY年」加左右各一组双箭头翻年，一条分隔线，
-/// 下方 3 列 × 4 行的月份网格，当前正在显示的月份用强调色圆角块高亮。
+/// 下方 3 列 × 4 行的月份网格，当前正在显示的月份用强调色圆角块高亮；
+/// 真实世界的「当年当月」通过外层圆环、圆点与微弱色块标注，方便跨年/跨月浏览时一眼找回现实时间锚点。
 ///
 /// 为什么自绘而不用 `.popover`：iPad 的 popover 自带指针箭头且没有公开 API 可以关掉，
 /// 而参考图里没有箭头。自绘面板配一层透明收口层（在 `RootView` 里挂），
@@ -69,16 +70,24 @@ struct MonthPickerPanel: View {
     // MARK: - 年份行
 
     private var yearHeader: some View {
-        HStack(spacing: 0) {
+        let isTodayYear = browsingYear == CalendarUtils.year(of: Date())
+        return HStack(spacing: 0) {
             yearStepButton(delta: -1, label: "上一年")
             Spacer(minLength: 0)
             // 用 `Text(verbatim:)` 而不是 `Text("\(browsingYear)年")`：
             // 后者是**带插值的字符串字面量**，会被当成 `LocalizedStringKey`，
             // 其中的 Int 走本地化数字格式化，于是年份被加上千位分隔符，渲染成「2,026年」。
             // 年份不是需要按语言分组的数字量，走 String 插值（verbatim）才是对的。
-            Text(verbatim: "\(browsingYear)年")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .monospacedDigit()
+            HStack(spacing: 5) {
+                Text(verbatim: "\(browsingYear)年")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                if isTodayYear {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 5, height: 5)
+                }
+            }
             Spacer(minLength: 0)
             yearStepButton(delta: 1, label: "下一年")
         }
@@ -90,7 +99,7 @@ struct MonthPickerPanel: View {
     ///
     /// 双箭头是用**两枚同向 chevron 叠出来**的，而不是用 SF Symbols 里那种
     /// 「chevron 后面带序号」的编号字形（`chevron.left.2` / `chevron.right.2`）：
-    /// 那类字形在不同 SF Symbols 版本里不一定存在，缺字形时 SwiftUI 会静默渲染空白，
+    /// 那类字形在不同 SF Symbols 版本里不一定存在，缺字形时 SwiftUI 静默渲染空白，
     /// 界面上就会出现两个点不动的隐形按钮。
     /// （这行注释里写了那两个被禁的字形名也不要紧 —— 门禁比对源码前会先剥掉行注释，
     ///   见 verify_ui_regressions.swift 的 `code(of:)`。）
@@ -187,26 +196,42 @@ struct MonthPickerPanel: View {
     private func monthCell(_ value: Int) -> some View {
         let isCurrent = browsingYear == CalendarUtils.year(of: month)
             && value == CalendarUtils.month(of: month)
+        let now = Date()
+        let isTodayMonth = browsingYear == CalendarUtils.year(of: now)
+            && value == CalendarUtils.month(of: now)
+
         return Button {
             onPick(CalendarUtils.startOfMonth(year: browsingYear, month: value))
         } label: {
             // 同 `yearHeader`：`Text("\(value)月")` 会走 LocalizedStringKey 的数字格式化，
             // 虽然 1…12 撞不上千位分隔符，但没有理由让两处标签走两套渲染路径。
             Text(verbatim: "\(value)月")
-                .font(.system(size: 16, weight: isCurrent ? .bold : .medium, design: .rounded))
+                .font(.system(size: 16, weight: (isCurrent || isTodayMonth) ? .bold : .medium, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(isCurrent ? Color.white : Color.primary)
+                .foregroundStyle(isCurrent ? Color.white : (isTodayMonth ? Color.accentColor : Color.primary))
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .background(
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(isCurrent ? Color.accentColor : Color.clear)
+                        .fill(isCurrent ? Color.accentColor : (isTodayMonth ? Color.accentColor.opacity(0.12) : Color.clear))
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(isTodayMonth && !isCurrent ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 1.25)
+                )
+                .overlay(alignment: .bottom) {
+                    if isTodayMonth {
+                        Circle()
+                            .fill(isCurrent ? Color.white.opacity(0.9) : Color.accentColor)
+                            .frame(width: 4, height: 4)
+                            .padding(.bottom, 5)
+                    }
+                }
                 .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
         .buttonStyle(.plain)
         // 无障碍朗读同样不能走本地化数字格式化，否则会念成「2,026 年 1 月」。
-        .accessibilityLabel(Text(verbatim: "\(browsingYear)年\(value)月"))
+        .accessibilityLabel(Text(verbatim: isTodayMonth ? "\(browsingYear)年\(value)月，本月" : "\(browsingYear)年\(value)月"))
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 }

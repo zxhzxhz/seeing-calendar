@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.36] — 已选中日格单击直达画布 · 月份面板现实时间锚点 · 护眼和纸底色 · 日历缓存与 Equatable 短路修复
+
+### 视觉与交互体验升级 (UI & HIG)
+- **已选中日格再次单击直达画布 (RootView & MonthGridView)**
+  - 当某个日格已处于选中态（外层选中环已激活）时，再次单击该日格即可直接进入全屏手绘画布，消除重复双击门槛，同时保留未选中日格的单击选中与快速双击直达语义。
+- **月份选择面板现实时间锚点 (MonthPickerPanel)**
+  - 参考 iOS 原生日历设计，在年份头部与月份网格中增加「当年当月」现实时间锚点指示（外层圆环、底部圆点与微弱强调色底块），跨年/跨月浏览时可一眼找回当前真实年月。
+- **画布柔和护眼纸张色选项 (PaperBackgroundView & DayEditorView)**
+  - 在画布编辑器右上角更多菜单中新增「纸张底色」选项（支持纯白画纸 `#FFFFFF`、复古和纸 · 护眼米白 `#FBF9F5`、暖调羊皮 `#F5EFE6`、护眼豆绿 `#F2F7F2`），通过 `ToolSettingsStore` 持久化记忆用户偏好，降低暗光与长时间书写时的视觉眩光。
+
+### 120Hz 渲染与核心性能优化 (Performance P0)
+- **【P0】消除 `CalendarUtils.calendar` 高频重复实例化 (CalendarUtils)**
+  - 将 `CalendarUtils.calendar` 与 `holidayCalendar` 改造为线程安全的持久化缓存实例（并在系统时区变更时自动失效重建），彻底消除 126 格月历求值期间每帧数百次 `CFCalendarCreateWithIdentifier` 堆内存分配。
+- **【P0】修复 `MonthGridView.==` 等值短路击穿 (MonthGridView & MonthPager)**
+  - 将选中环拆分为独立的 `MonthSelectionRingOverlay` 并挂载于 `MonthGridView.equatable()` 之外，同时从 `MonthGridView.==` 中移除 `selectedDate` 比较，使点选切换日期时 3 个月共 126 个日格完全短路零重算，仅由外层轻量选中环执行弹簧位移动画。
+
 ## [1.0.35] — 今天按钮焦点态自适应 · 工具/笔持久化记忆 · 维度与订阅体验重构 · 动效与提示规范化
 
 ### 视觉与交互打磨

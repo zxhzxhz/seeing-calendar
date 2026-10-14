@@ -115,6 +115,15 @@ final class CompositeCanvasContainerView: UIView {
         didSet { eraserIndicator.eraserWidth = eraserWidth }
     }
 
+    /// 画布纸张底色样式（纯白 / 复古和纸护眼米白 `#FBF9F5` 等）。
+    var paperStyle: CanvasPaperStyle = .pureWhite {
+        didSet {
+            guard oldValue != paperStyle else { return }
+            paperView.paperStyle = paperStyle
+            backgroundColor = paperStyle.backgroundColor
+        }
+    }
+
     // MARK: - 生命周期
 
     override init(frame: CGRect) {

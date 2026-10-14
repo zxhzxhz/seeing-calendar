@@ -44,7 +44,9 @@ final class MonthPagerState {
 /// 性能约定：
 /// ① 逐帧只有 `.offset` 在变，三个 `MonthGridView` 被 `EquatableView` 短路，
 ///    子树不重算 → 实际开销只是一次 layer transform（GPU）；
-/// ② 所有昂贵输入（日记录字典、按日事件索引、假期表、内容指纹）都在
+/// ② 点选日期时 `MonthGridView.==` 不比较 `selectedDate`，仅外层 `MonthSelectionRingOverlay`
+///    做平滑弹簧位移，126 个日格的 body 零重算；
+/// ③ 所有昂贵输入（日记录字典、按日事件索引、假期表、内容指纹）都在
 ///    `RootView` 里算好再传进来，翻页期间 `RootView` 不重算，因此这些准备成本为零。
 struct MonthPager: View {
     let month: Date
@@ -93,8 +95,8 @@ struct MonthPager: View {
     private func page(offset delta: Int) -> some View {
         let target = CalendarUtils.addMonths(delta, to: month)
         // .equatable() → EquatableView(content:)：输入未变时整棵 42 格子树不重算，
-        // 拖动期间只做一次 layer transform。
-        // 注意：`.frame` 必须接在 `.equatable()` **之后**（反过来的话内容类型变成
+        // 拖动期间只做一次 layer transform，点选日期时也只移动外层选中环。
+        // 注意：`.frame` 与 `.overlay` 必须接在 `.equatable()` **之后**（反过来的话内容类型变成
         // ModifiedContent，那不是 Equatable，短路就失效了）。
         return MonthGridView(month: target,
                              selectedDate: selectedDate,
@@ -111,6 +113,11 @@ struct MonthPager: View {
                              onSelect: onSelect,
                              onOpen: onOpen)
             .equatable()
+            .overlay(alignment: .top) {
+                MonthSelectionRingOverlay(month: target,
+                                          selectedDate: selectedDate,
+                                          availableSize: availableSize)
+            }
             .compositingGroup()
             .frame(width: containerWidth)
     }

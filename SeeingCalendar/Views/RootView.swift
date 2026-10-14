@@ -178,29 +178,37 @@ struct RootView: View {
     // MARK: - 月历 + 左右滑动翻月（上/下月常驻预渲染）
 
     private func monthPager(availableSize: CGSize, containerWidth: CGFloat) -> some View {
-        MonthPager(month: month,
-                   selectedDate: selectedDate,
-                   records: dayRecords,
-                   eventsByDay: pagedEvents,
-                   holidays: holidayRegistry.statuses,
-                   holidayNames: holidayRegistry.names,
-                   contentToken: monthContentToken,
-                   thumbnailVersion: ThumbnailStore.shared.version,
-                   availableSize: availableSize,
-                   containerWidth: containerWidth,
-                   pulseKey: pulseKey,
-                   pulseID: pulseToken,
-                   zoomNamespace: zoomNamespace,
-                   state: pager,
-                   onSelect: { date in
-                       // 只更新选中日期：点中非本月日格也**不切换月视图**，
-                       // 画布就在本页弹出（spec 交互诉求）。
-                       selectedDate = date
-                   },
-                   onOpen: { date in openDay(date, pageIndex: 0) },
-                   onMonthChange: { delta in
-                       month = CalendarUtils.addMonths(delta, to: month)
-                   })
+        let records = dayRecords
+        let events = pagedEvents
+        let token = computeMonthContentToken(records: records, events: events)
+        return MonthPager(month: month,
+                          selectedDate: selectedDate,
+                          records: records,
+                          eventsByDay: events,
+                          holidays: holidayRegistry.statuses,
+                          holidayNames: holidayRegistry.names,
+                          contentToken: token,
+                          thumbnailVersion: ThumbnailStore.shared.version,
+                          availableSize: availableSize,
+                          containerWidth: containerWidth,
+                          pulseKey: pulseKey,
+                          pulseID: pulseToken,
+                          zoomNamespace: zoomNamespace,
+                          state: pager,
+                          onSelect: { date in
+                              // 当一个日格已经被选中（外层选中环激活）时，允许再次单击直接打开画布；
+                              // 否则仅更新选中日期：点中非本月日格也**不切换月视图**，
+                              // 画布就在本页弹出（spec 交互诉求）。
+                              if CalendarUtils.isSameDay(selectedDate, date) {
+                                  openDay(date, pageIndex: 0)
+                              } else {
+                                  selectedDate = date
+                              }
+                          },
+                          onOpen: { date in openDay(date, pageIndex: 0) },
+                          onMonthChange: { delta in
+                              month = CalendarUtils.addMonths(delta, to: month)
+                          })
     }
 
     // MARK: - 月份选择下拉面板
@@ -259,20 +267,21 @@ struct RootView: View {
 
     /// O(1) 判定用的内容指纹：把「会影响月历外观的所有输入」压成一个整数。
     ///
-    /// 为什么需要：`MonthGridView` 遵循 `Equatable`，翻月滑动时父层要把 126 个日格
+    /// 为什么需要：`MonthGridView` 遵循 `Equatable`，翻月滑动与点选日期时父层要把 126 个日格
     /// 整体短路掉。但 `DayRecord` 是引用类型、字典逐项比较是 O(n)，直接比较会让短路失效。
     /// 于是这里预扫一遍（约 126 次 O(1) 哈希查找，微秒级，且**只在 RootView.body 里发生一次**），
     /// 任何绘制相关输入变化都会让指纹自增 —— 视图侧就只需比一个 Int。
-    private var monthContentToken: Int {
+    private func computeMonthContentToken(records: [String: DayRecord],
+                                          events: [String: [CalendarEvent]]) -> Int {
         var token = 0
-        for record in dayRecords.values {
+        for record in records.values {
             token = token &* 31 &+ Int(record.updatedAt.timeIntervalSince1970 * 1_000) &+ record.pageCount
         }
-        for events in pagedEvents.values {
-            token = token &* 31 &+ events.count
+        for dayEvents in events.values {
+            token = token &* 31 &+ dayEvents.count
         }
         token = token &* 31 &+ holidayRegistry.version
-        token = token &* 31 &+ pagedEvents.count
+        token = token &* 31 &+ events.count
         // 当前维度参与指纹：切维度时事件内容变了但数量恰好相同（两边都是 3 条）的话，
         // 光看计数会误判成「没变化」，月历就会把上一块画板的彩点接着画下去。
         token = token &* 31 &+ (workspace?.uuid.uuidString.hashValue ?? 0)
@@ -514,6 +523,7 @@ struct RootView: View {
     }
 
     private func openDay(_ date: Date, pageIndex: Int) {
+        guard editorRequest == nil else { return }
         let target = workspace ?? repository.ensureDefaultWorkspace()
         guard let record = repository.day(for: date, workspace: target, create: true) else { return }
         selectedDate = date

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 工具栏偏好（墨色 / 笔宽 / 橡皮模式 / 橡皮大小）的持久化归宿。
+/// 工具栏偏好（墨色 / 笔宽 / 橡皮模式 / 橡皮大小 / 纸张底色）的持久化归宿。
 ///
 /// 第一性原理：这些值是**操作者的习惯**，而不是某一天的数据 ——
 /// 所以不该进 SwiftData（会跟着备份 / 恢复漂移，且读取要等 `ModelContext` 就绪），
@@ -25,6 +25,7 @@ struct ToolSettingsStore {
         static let edgeDoubleTapSettings = "editorTool.edgeDoubleTapSettings"
         static let lastSelectedTool = "editorTool.lastSelectedTool"
         static let isLassoActive = "editorTool.isLassoActive"
+        static let paperStyle = "editorTool.paperStyle"
 
         static func penColor(_ tool: CanvasTool) -> String {
             "editorTool.penColor.\(tool.rawValue)"
@@ -36,6 +37,21 @@ struct ToolSettingsStore {
 
         static func penOpacity(_ tool: CanvasTool) -> String {
             "editorTool.penOpacity.\(tool.rawValue)"
+        }
+    }
+
+    // MARK: - 纸张底色
+
+    var paperStyle: CanvasPaperStyle {
+        get {
+            guard let raw = defaults.string(forKey: Key.paperStyle),
+                  let style = CanvasPaperStyle(rawValue: raw) else {
+                return .pureWhite
+            }
+            return style
+        }
+        nonmutating set {
+            defaults.set(newValue.rawValue, forKey: Key.paperStyle)
         }
     }
 

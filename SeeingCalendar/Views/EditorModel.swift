@@ -174,6 +174,8 @@ final class EditorModel {
     var eraserMode: EraserMode = .wholeStroke
     /// 橡皮有效范围直径（画布世界坐标）；同时决定 PKEraserTool.width 与指示圈直径。
     var eraserWidth: CGFloat = 26
+    /// 画布纸张底色（默认纯白，支持切换复古和纸色 `#FBF9F5` 等护眼底色并持久化）。
+    var paperStyle: CanvasPaperStyle = .pureWhite
 
     // 边缘双击快捷切换
     var edgeDoubleTapSettings: EdgeDoubleTapSettings = EdgeDoubleTapSettings()
@@ -225,6 +227,7 @@ final class EditorModel {
         adoptPenSettings(for: currentInkTool)
         if let mode = settings.eraserMode { eraserMode = mode }
         if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
+        paperStyle = settings.paperStyle
         edgeDoubleTapSettings = settings.edgeDoubleTapSettings
         isLassoActive = savedLasso
         activeTool = savedLasso ? nil : (settings.lastSelectedTool ?? .pen)
@@ -332,6 +335,7 @@ final class EditorModel {
         host.isRightEdgeEnabled = edgeDoubleTapSettings.right.isEnabled
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
         host.canvas.isLassoActive = isLassoActive
+        host.canvas.paperStyle = paperStyle
         appliedToolSignature = ""          // 强制首次下发
         syncUIKitState(of: host)
         // 延后到下一轮运行循环：避免在 SwiftUI 视图更新期间修改可观察状态。
@@ -359,6 +363,9 @@ final class EditorModel {
         }
         if host.canvas.isLassoActive != isLassoActive {
             host.canvas.isLassoActive = isLassoActive
+        }
+        if host.canvas.paperStyle != paperStyle {
+            host.canvas.paperStyle = paperStyle
         }
         let signature = toolSignature
         if signature != appliedToolSignature {
@@ -703,6 +710,14 @@ final class EditorModel {
         eraserWidth = width
         settings.eraserWidth = Double(width)
         applyToolImmediately()
+    }
+
+    /// 切换画布纸张底色（并持久化到 ToolSettingsStore）。
+    func updatePaperStyle(_ style: CanvasPaperStyle) {
+        paperStyle = style
+        settings.paperStyle = style
+        canvasHost?.canvas.paperStyle = style
+        toastMessage = "已切换纸张：\(style.shortTitle)"
     }
 
     /// 是否处于「无工具 / 导航」状态。

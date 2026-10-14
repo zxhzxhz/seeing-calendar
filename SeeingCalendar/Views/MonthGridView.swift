@@ -3,10 +3,11 @@ import SwiftUI
 /// 7×6 月历矩阵：固定 42 格，单元格严格 1:1，宽度自适应决定 LOD 分级。
 ///
 /// 性能约定（真机实测：点选日期曾有十分明显的延迟）：
-/// ① 单元格的输入不含「是否选中」——选中环由本视图单独一层绘制，点选时 126 个格子无需重算；
+/// ① 单元格与网格等值判定均不含「是否选中」——选中环由外层 `MonthSelectionRingOverlay` 独立绘制，
+///   点选切换日期时 `MonthGridView.==` 恒为 true，126 个格子零重算；
 /// ② 页数取自 `DayRecord.pageCount` 冗余字段，渲染路径上不触碰 SwiftData 关系（避免 fault）；
-/// ③ 单击/双击由本视图自己做时间判定，不再依赖 SwiftUI 单/双击手势仲裁（否则单击要等 ~300ms）。
-/// ④ 本视图遵循 `Equatable` 且比较是 O(1)：翻月滑动时由父层的 `EquatableView` 整体短路，
+/// ③ 单击/双击由本视图与父层协同判定：未选中日格单击选中、已选中日格再次单击（或快速双击）直接进入画布；
+/// ④ 本视图遵循 `Equatable` 且比较是 O(1)：翻月滑动与点选日期时均由父层的 `EquatableView` 整体短路，
 ///    126 个日格的 body 一次都不会重跑。
 struct MonthGridView: View, Equatable {
     let month: Date
@@ -68,15 +69,13 @@ struct MonthGridView: View, Equatable {
 
     /// O(1) 等价判定。
     ///
-    /// 刻意不比 `records` / `eventsByDay` / `holidays`：`DayRecord` 是类、非 `Equatable`，
-    /// 字典逐项比较也是 O(n)；而这些内容的任何变化都会反映在父层给的 `contentToken` 里。
-    /// 闭包与 `zoomNamespace` 同理不参与比较（前者每次重建，后者生命周期内恒定）。
-    /// `pulseKey` / `pulseID` 必须参与：脉冲环 900ms 后要把 `pulseKey` 置回 nil 来收尾，
-    /// 只比 `pulseID` 会让环永远留在格子上。
+    /// 刻意不比 `selectedDate`：选中环已拆至外层 `MonthSelectionRingOverlay` 独立渲染，
+    /// 点选日期时 42 格内容毫无变化，剥离 `selectedDate` 后 `EquatableView` 即可完美短路，
+    /// 彻底避免点选引发的 126 格全量重算。
+    /// 同样不比 `records` / `eventsByDay` / `holidays`：其变化均已反映在 `contentToken` 中。
     nonisolated static func == (lhs: MonthGridView, rhs: MonthGridView) -> Bool {
         lhs.contentToken == rhs.contentToken
             && lhs.month == rhs.month
-            && lhs.selectedDate == rhs.selectedDate
             && lhs.availableSize == rhs.availableSize
             && lhs.pulseID == rhs.pulseID
             && lhs.pulseKey == rhs.pulseKey
@@ -120,19 +119,16 @@ struct MonthGridView: View, Equatable {
     private var tier: CellLODTier { CellLODTier.resolve(for: cellWidth) }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            VStack(spacing: spacing) {
-                weekdayHeader
-                ForEach(0..<6, id: \.self) { row in
-                    HStack(spacing: spacing) {
-                        ForEach(0..<7, id: \.self) { column in
-                            let index = row * 7 + column
-                            cell(for: gridDates[index])
-                        }
+        VStack(spacing: spacing) {
+            weekdayHeader
+            ForEach(0..<6, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<7, id: \.self) { column in
+                        let index = row * 7 + column
+                        cell(for: gridDates[index])
                     }
                 }
             }
-            selectionRing
         }
         .frame(width: cellWidth * 7 + spacing * 6,
                height: MonthGridView.gridHeight(cellWidth: cellWidth))
@@ -175,24 +171,6 @@ struct MonthGridView: View, Equatable {
         .frame(height: weekdayHeaderHeight)
     }
 
-    /// 选中环：独立一层，位置由选中日期算出，不改变任何格子的输入。
-    @ViewBuilder
-    private var selectionRing: some View {
-        if let index = gridDates.firstIndex(where: { CalendarUtils.isSameDay($0, selectedDate) }) {
-            let row = index / 7
-            let column = index % 7
-            RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: 2)
-                .shadow(color: Color.accentColor.opacity(0.18), radius: 4, x: 0, y: 1)
-                .frame(width: cellWidth, height: cellWidth)
-                .offset(x: CGFloat(column) * (cellWidth + spacing),
-                        y: weekdayHeaderHeight + spacing + CGFloat(row) * (cellWidth + spacing))
-                .allowsHitTesting(false)
-                .transition(.opacity)
-                .animation(.spring(response: 0.22, dampingFraction: 0.82), value: selectedDate)
-        }
-    }
-
     private func cell(for date: Date) -> some View {
         let key = CalendarUtils.key(for: date)
         let record = records[key]
@@ -217,7 +195,9 @@ struct MonthGridView: View, Equatable {
             .accessibilityLabel(CalendarUtils.dayTitle(date))
     }
 
-    /// 自行判定单击/双击：单击立即生效（不再等待系统双击超时），双击进入画布。
+    /// 自行判定单击/双击：
+    /// - 未选中日格：单击立即选中（移动外层选中环），快速双击直接进入画布；
+    /// - 已选中日格（外层选中环激活）：再次单击立即进入画布。
     private func handleTap(date: Date, key: String) {
         let now = Date()
         if let lastKey = lastTapKey, lastKey == key,
@@ -260,5 +240,52 @@ struct MonthGridView: View, Equatable {
             if Task.isCancelled { return }
             await ThumbnailStore.shared.load(slot, page: page)
         }
+    }
+}
+
+/// 独立选中环覆盖层：挂在 `MonthGridView.equatable()` 之外，
+/// 确保点选日期时只有这一层轻量几何做弹簧位移，42 个日格完全不触发重算。
+struct MonthSelectionRingOverlay: View {
+    let month: Date
+    let selectedDate: Date
+    let availableSize: CGSize
+    let gridDates: [Date]
+
+    init(month: Date, selectedDate: Date, availableSize: CGSize) {
+        self.month = month
+        self.selectedDate = selectedDate
+        self.availableSize = availableSize
+        self.gridDates = CalendarUtils.gridDates(forMonthContaining: month)
+    }
+
+    private let spacing = MonthGridView.spacing
+    private let weekdayHeaderHeight = MonthGridView.weekdayHeaderHeight
+
+    private var cellWidth: CGFloat {
+        MonthGridView.cellWidth(availableSize: availableSize)
+    }
+
+    private var tier: CellLODTier { CellLODTier.resolve(for: cellWidth) }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            if let index = gridDates.firstIndex(where: { CalendarUtils.isSameDay($0, selectedDate) }) {
+                let row = index / 7
+                let column = index % 7
+                RoundedRectangle(cornerRadius: tier == .lod1Minimal ? 4 : 7, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .shadow(color: Color.accentColor.opacity(0.18), radius: 4, x: 0, y: 1)
+                    .frame(width: cellWidth, height: cellWidth)
+                    .offset(x: CGFloat(column) * (cellWidth + spacing),
+                            y: weekdayHeaderHeight + spacing + CGFloat(row) * (cellWidth + spacing))
+                    .transition(.opacity)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.82), value: selectedDate)
+            }
+        }
+        .frame(width: cellWidth * 7 + spacing * 6,
+               height: MonthGridView.gridHeight(cellWidth: cellWidth))
+        .frame(maxWidth: .infinity, alignment: .top)
+        .allowsHitTesting(false)
     }
 }

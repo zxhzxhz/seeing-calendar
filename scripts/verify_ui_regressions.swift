@@ -326,6 +326,48 @@ func verifyUIDefaultsAgainstRegression() {
           "★ 顶栏年月标题旁不得再放下拉小箭头：标题本身就是入口，箭头只是视觉噪音")
     check(!rootCode.contains("rotationEffect(.degrees(showMonthPicker"),
           "下拉箭头的翻转动画必须一并清掉，不留死代码")
+
+    // ── 已选中日格再次单击直达画布 ─────────────────────────────────────────
+    check(rootCode.contains("if CalendarUtils.isSameDay(selectedDate, date)"),
+          "已选中日格再次单击必须直接打开画布")
+
+    // ── 月份面板当年当月现实时间锚点 ───────────────────────────────────────
+    if let panel = productionSource("SeeingCalendar/Views/MonthPickerPanel.swift") {
+        let panelCode = code(of: panel)
+        check(panelCode.contains("isTodayMonth"), "月份选择器必须标注真实世界的当年当月锚点")
+    }
+
+    // ── 画布护眼纸张底色（#FBF9F5）与右上角菜单入口 ────────────────────────
+    if let paper = productionSource("SeeingCalendar/Canvas/PaperBackgroundView.swift") {
+        let paperCode = normalizeWhitespace(paper)
+        check(paperCode.contains("enum CanvasPaperStyle"), "必须定义 CanvasPaperStyle 纸张底色枚举")
+        check(paperCode.contains("#FBF9F5"), "必须提供复古和纸护眼米白色 #FBF9F5")
+    } else {
+        check(false, "读不到 PaperBackgroundView.swift")
+    }
+    if let dayEditor = productionSource("SeeingCalendar/Views/DayEditorView.swift") {
+        let editorCode = normalizeWhitespace(dayEditor)
+        check(editorCode.contains("Section(\"纸张底色\")"), "编辑器右上角菜单必须包含纸张底色分组")
+        check(editorCode.contains("model.updatePaperStyle(style)"), "点击纸张色菜单项必须更新模型纸张底色")
+    }
+
+    // ── P0：CalendarUtils.calendar 持久化缓存与 MonthGridView.== 短路 ──────
+    if let calUtils = productionSource("SeeingCalendar/App/CalendarUtils.swift") {
+        let calCode = normalizeWhitespace(calUtils)
+        check(calCode.contains("cachedCalendar"), "CalendarUtils.calendar 必须走持久化缓存实例")
+        check(calCode.contains("static let holidayCalendar: Calendar"), "holidayCalendar 必须为静态常量")
+    } else {
+        check(false, "读不到 CalendarUtils.swift")
+    }
+    if let grid = productionSource("SeeingCalendar/Views/MonthGridView.swift") {
+        let gridCode = code(of: grid)
+        check(!gridCode.contains("lhs.selectedDate == rhs.selectedDate"),
+              "★ MonthGridView.== 不得比较 selectedDate，否则点选日期会击穿 Equatable 短路引发 126 格全量重算")
+        check(gridCode.contains("struct MonthSelectionRingOverlay: View"),
+              "选中环必须拆分为独立覆盖层 MonthSelectionRingOverlay")
+    } else {
+        check(false, "读不到 MonthGridView.swift")
+    }
 }
 
 // MARK: - 运行

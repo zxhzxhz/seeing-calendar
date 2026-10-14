@@ -4,12 +4,32 @@ import Foundation
 enum CalendarUtils {
     static let weekdaySymbols = ["一", "二", "三", "四", "五", "六", "日"]
 
-    static var calendar: Calendar {
+    private static let calendarLock = NSLock()
+    nonisolated(unsafe) private static var cachedCalendar: Calendar = makeCalendar(for: .current)
+    nonisolated(unsafe) private static var cachedTimeZoneID: String = TimeZone.current.identifier
+
+    private static func makeCalendar(for timeZone: TimeZone) -> Calendar {
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = .current
+        cal.timeZone = timeZone
         cal.firstWeekday = 2          // 周一
         cal.minimumDaysInFirstWeek = 4
         return cal
+    }
+
+    /// 线程安全的持久化日历实例：避免 120Hz 渲染与网格求值期间每帧数百次重复创建 CFCalendar。
+    /// 当系统时区发生变更时自动重建并清空月历矩阵缓存。
+    static var calendar: Calendar {
+        let currentTZ = TimeZone.current
+        calendarLock.lock()
+        defer { calendarLock.unlock() }
+        if cachedTimeZoneID != currentTZ.identifier {
+            cachedTimeZoneID = currentTZ.identifier
+            cachedCalendar = makeCalendar(for: currentTZ)
+            gridDatesLock.lock()
+            gridDatesCache.removeAll()
+            gridDatesLock.unlock()
+        }
+        return cachedCalendar
     }
 
     /// 中国大陆法定节假日一律以 **CST（UTC+8）** 为准，不得跟随设备时区。
@@ -17,13 +37,10 @@ enum CalendarUtils {
     /// 原因：调休补班事件在 ICS 里是 `DTSTART:20260104T090000`（浮动时间、无 TZID），
     /// 语义是「北京时间 1 月 4 日早上 9 点上班」。若按设备时区解释，
     /// 夏威夷（UTC-10）等西部时区的用户会把它算到**前一天**，补班样式就贴错格了。
-    static var holidayCalendar: Calendar {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
-        cal.firstWeekday = 2
-        cal.minimumDaysInFirstWeek = 4
-        return cal
-    }
+    static let holidayCalendar: Calendar = {
+        let tz = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        return makeCalendar(for: tz)
+    }()
 
     // MARK: - Key 转换
 
@@ -34,8 +51,9 @@ enum CalendarUtils {
 
     /// 按指定时区取日期键（仅供节假日数据使用，见 `holidayCalendar`）。
     static func key(for date: Date, timeZone: TimeZone) -> String {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timeZone
+        let cal = (timeZone.identifier == holidayCalendar.timeZone.identifier)
+            ? holidayCalendar
+            : makeCalendar(for: timeZone)
         let parts = cal.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
@@ -54,8 +72,9 @@ enum CalendarUtils {
 
     /// 按指定时区取日首（仅供节假日数据使用）。
     static func startOfDay(_ date: Date, timeZone: TimeZone) -> Date {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timeZone
+        let cal = (timeZone.identifier == holidayCalendar.timeZone.identifier)
+            ? holidayCalendar
+            : makeCalendar(for: timeZone)
         return cal.startOfDay(for: date)
     }
 
@@ -111,10 +130,11 @@ enum CalendarUtils {
         }
         gridDatesLock.unlock()
 
-        let weekday = calendar.component(.weekday, from: first)
-        let leading = (weekday - calendar.firstWeekday + 7) % 7
+        let cal = calendar
+        let weekday = cal.component(.weekday, from: first)
+        let leading = (weekday - cal.firstWeekday + 7) % 7
         // 锚定在中午 12:00 加减天数，防御夏令时（DST）切换导致的跨天时间漂移
-        let noonFirst = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: first) ?? first
+        let noonFirst = cal.date(bySettingHour: 12, minute: 0, second: 0, of: first) ?? first
         let start = addDays(-leading, to: noonFirst)
         let dates = (0..<42).map { addDays($0, to: start) }
 
@@ -134,8 +154,9 @@ enum CalendarUtils {
     }
 
     static func weekdayName(_ date: Date) -> String {
-        let weekday = calendar.component(.weekday, from: date)
-        let index = (weekday - calendar.firstWeekday + 7) % 7
+        let cal = calendar
+        let weekday = cal.component(.weekday, from: date)
+        let index = (weekday - cal.firstWeekday + 7) % 7
         return "周" + weekdaySymbols[index]
     }
 
@@ -145,17 +166,19 @@ enum CalendarUtils {
     }
 
     static func shortDateTimeString(_ date: Date) -> String {
-        if calendar.isDateInToday(date) {
+        let cal = calendar
+        if cal.isDateInToday(date) {
             return "今天 \(timeString(date))"
         }
-        let parts = calendar.dateComponents([.month, .day, .hour, .minute], from: date)
+        let parts = cal.dateComponents([.month, .day, .hour, .minute], from: date)
         return String(format: "%d月%d日 %02d:%02d", parts.month ?? 1, parts.day ?? 1, parts.hour ?? 0, parts.minute ?? 0)
     }
 
     static func relativeLabel(for date: Date) -> String {
-        if calendar.isDateInToday(date) { return "今天" }
-        if calendar.isDateInYesterday(date) { return "昨天" }
-        if calendar.isDateInTomorrow(date) { return "明天" }
+        let cal = calendar
+        if cal.isDateInToday(date) { return "今天" }
+        if cal.isDateInYesterday(date) { return "昨天" }
+        if cal.isDateInTomorrow(date) { return "明天" }
         return dayTitle(date)
     }
 }

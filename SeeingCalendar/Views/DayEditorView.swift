@@ -802,6 +802,24 @@ struct DayEditorView: View {
                     }
                 }
 
+                Section("纸张底色") {
+                    Menu {
+                        ForEach(CanvasPaperStyle.allCases) { style in
+                            Button {
+                                model.updatePaperStyle(style)
+                            } label: {
+                                if model.paperStyle == style {
+                                    Label(style.title, systemImage: "checkmark")
+                                } else {
+                                    Text(style.title)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("护眼纸张色（\(model.paperStyle.shortTitle)）", systemImage: "doc.plaintext")
+                    }
+                }
+
                 Section("插入贴图") {
                     Button {
                         isPhotoPickerRequested = true
