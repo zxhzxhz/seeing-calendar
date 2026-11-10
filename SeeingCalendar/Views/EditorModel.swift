@@ -127,9 +127,6 @@ final class EditorModel {
     var isFingerDrawingEnabled: Bool = false {
         didSet { syncUIKitState(of: canvasHost) }
     }
-    var isLassoActive: Bool = false {
-        didSet { syncUIKitState(of: canvasHost) }
-    }
 
     /// 打开编辑器时的全局默认手指书写值（关闭时回写，避免编辑过程中触发外层重渲染）。
     private(set) var fingerDrawingAtLaunch: Bool = false
@@ -149,19 +146,48 @@ final class EditorModel {
     var note: String
     var toastMessage: String?
 
-    // 二次编辑状态
-    var editingItemID: UUID?
-    var editingItemPayload: CanvasItemPayload?
-    var editingTextConfig: TextItemConfig?
-    var isEditingText: Bool = false
-    var editingShapeConfig: ShapeItemConfig?
-    var isEditingShape: Bool = false
+    // 二次编辑状态：`editSession` 是唯一真值，下列投影全部从它派生
+    // （payload 单独就能判别编辑态种类与配置，其余只是镜像）。
+    var editSession: CanvasEditSession = .none
 
-    /// nil = 导航态（未选中任何工具，只平移缩放）。
-    /// 注意：这些属性**不依赖属性观察器**驱动工具下发 ——
-    /// 变更请走 `select(tool:)` / `updatePenColor(_:)` 等显式方法（它们会立即下发），
-    /// 或依赖 `syncUIKitState` 的幂等签名比较兜底。
-    var activeTool: CanvasTool? = .pen
+    /// 二次编辑目标图元 id（派生投影，真值在 `editSession`）。
+    var editingItemID: UUID? { editSession.itemID }
+    /// 二次编辑载荷（派生投影，真值在 `editSession`）。
+    var editingItemPayload: CanvasItemPayload? { editSession.payload }
+    /// 文本配置（派生投影，真值在 `editSession`）。
+    var editingTextConfig: TextItemConfig? { editSession.textConfig }
+    /// 形状配置（派生投影，真值在 `editSession`）。
+    var editingShapeConfig: ShapeItemConfig? { editSession.shapeConfig }
+
+    /// 是否正在编辑文本。
+    ///
+    /// **可写**是为了兼容 `DayEditorView` 的 `Binding<Bool>` setter：用户下滑关闭
+    /// 表单时 SwiftUI 会把 binding 置 `false`，此时收敛到 `.none`。置 `true`
+    /// **不改动** —— 编辑态的真值来源是 payload，而不是这个布尔镜像。
+    var isEditingText: Bool {
+        get { editSession.isEditingText }
+        set { if !newValue { editSession = .none } }
+    }
+
+    /// 是否正在编辑形状（setter 语义与 `isEditingText` 相同：置 false 收敛，置 true 不改）。
+    var isEditingShape: Bool {
+        get { editSession.isEditingShape }
+        set { if !newValue { editSession = .none } }
+    }
+
+    /// 画布输入模式的**单一真值**：7 个互斥状态（导航 / 4 种笔 / 橡皮 / 套索）。
+    ///
+    /// 旧实现用 `activeTool` × `isLassoActive` 两个独立字段编码这 7 态，合法组合没有任何
+    /// 类型约束；现在两者都降级为**只读计算投影**，`inputMode` 才是唯一可写真值。
+    /// 变更请走 `select(tool:)` / `toggleLasso()` / `switchTo(target:)` 等显式方法 —— 它们统一
+    /// 走「构造转移 → 应用 → 持久化 → 下发」的单一管线，**不依赖属性观察器**驱动副作用
+    /// （见 `scripts/verify_observation_semantics.swift`：@Observable 可能丢弃 didSet）。
+    var inputMode: CanvasInputMode = .ink(.pen)
+
+    /// 旧 `activeTool` 的**只读投影**：导航 / 套索态为 nil，橡皮为 `.eraser`，笔为其自身。
+    var activeTool: CanvasTool? { inputMode.tool }
+    /// 旧 `isLassoActive` 的**只读投影**。
+    var isLassoActive: Bool { inputMode.isLassoActive }
     /// **当前这支笔**的墨色（界面取色圆点、画布笔色都取它）。
     /// 每支笔在 `ToolSettingsStore` 里有自己的槽位，切笔时由 `adoptPenColor(for:)` 换上来。
     var penColorHex: String = EditorModel.defaultPenColor
@@ -182,23 +208,27 @@ final class EditorModel {
     var previousToolType: EdgeSwitchTargetTool = .eraser
     private var savedToolBeforeDesignated: EdgeSwitchTargetTool = .pen
 
+    /// 当前模式对应的边缘切换目标类型（导航 / 套索 / 各工具）。
     var currentActiveToolType: EdgeSwitchTargetTool {
-        if isLassoActive { return .lasso }
-        switch activeTool {
-        case .eraser: return .eraser
-        case .pen: return .pen
-        case .monoline: return .monoline
-        case .marker: return .marker
-        case .pencil: return .pencil
-        case nil: return .pen
-        }
+        CanvasInputModePolicy.edgeTarget(of: inputMode)
     }
 
     weak var canvasHost: CanvasHostView?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
-    /// 已下发的工具指纹：与期望指纹不一致时才重新下发。
-    /// 之所以不用「设置-清除标志位」，是因为它依赖属性观察器能否触发；
-    /// 幂等比较无论如何都能收敛到正确状态。
+    /// 自动保存相位（唯一真值）：「脏」由相位表达，不再隐式藏在 `saveTask != nil` 里。
+    /// 转移一律走显式方法（`markDirty` / `save` / `flushPendingSave`），
+    /// 不得依赖属性观察器 —— 见 `scripts/verify_observation_semantics.swift` 的结论。
+    @ObservationIgnored private(set) var savePhase: SavePhase = .clean
+    /// 已下发的工具指纹：`syncUIKitState` 在**下发之后**写入，是唯一的写点。
+    ///
+    /// 为什么保留存储属性、而不降级为 `CanvasInputModePolicy.signature(of: inputMode)` 的纯计算式：
+    /// 指纹的语义是「**已下发的是什么**」，不是「现在是什么」。`updatePenColor(_:)` /
+    /// `updatePenWidth(_:)` / `updatePenOpacity(_:)` / `updateEraserMode(_:)` 等只改**载荷**
+    /// （颜色 / 笔宽 / 橡皮配置）、不改模式，它们的重新下发完全依赖「已下发指纹 ≠ 期望指纹」
+    /// 这条比较 —— 若把它变成随 `inputMode` 纯计算的式子，则只要模式没变，比较恒为假，
+    /// 改颜色/笔宽就再也下不去。（改成「模式 + 载荷」的纯计算式也无解：那样任何一次 sync
+    /// 都会判定不相等而不停重复下发。）因此保留存储副本，但把**期望值**里的模式部分
+    /// 改为由 `inputMode` 计算得出（见 `toolSignature`）。
     @ObservationIgnored private var appliedToolSignature: String = ""
     @ObservationIgnored private var loadedPageUUID: UUID?
 
@@ -216,21 +246,32 @@ final class EditorModel {
     ///
     /// 放在 `init` 而不是 `attach(host:)`：恢复只改模型状态，
     /// 真正的工具下发由 `attach` 里的 `appliedToolSignature = ""` 强制完成一次。
+    ///
+    /// **迁移策略（M1 第二份副本）**：新键 `editorTool.inputMode` 缺失时，用旧键
+    /// `lastSelectedTool` / `lastIsLassoActive` 合成模式，随后写回新键 —— 一次性迁移。
+    /// 旧键**只读、不删除**：万一回滚到旧版本，它仍能读到（可能略旧）的值而不崩。
     private func restoreToolSettings() {
-        let savedLasso = settings.lastIsLassoActive
-        let savedTool = settings.lastSelectedTool ?? .pen
-        if savedTool != .eraser {
-            currentInkTool = savedTool
-        } else {
-            currentInkTool = .pen
+        let mode = settings.inputMode ?? Self.migratedInputMode(from: settings)
+        if settings.inputMode == nil {
+            settings.inputMode = mode      // 写回新键（一次性迁移）
         }
+        // 当前台面笔：模式本身就带笔时取它，否则取旧键里最后一次选过的笔（导航/套索态）。
+        let savedTool = settings.lastSelectedTool ?? .pen
+        let seed = mode.tool ?? savedTool
+        currentInkTool = (seed == .eraser) ? .pen : seed
         adoptPenSettings(for: currentInkTool)
-        if let mode = settings.eraserMode { eraserMode = mode }
-        if let width = settings.eraserWidth { eraserWidth = CGFloat(width) }
+        if let savedEraserMode = settings.eraserMode { eraserMode = savedEraserMode }
+        if let savedEraserWidth = settings.eraserWidth { eraserWidth = CGFloat(savedEraserWidth) }
         paperStyle = settings.paperStyle
         edgeDoubleTapSettings = settings.edgeDoubleTapSettings
-        isLassoActive = savedLasso
-        activeTool = savedLasso ? nil : (settings.lastSelectedTool ?? .pen)
+        inputMode = mode
+    }
+
+    /// 旧键 → 模式的一次性迁移（逐位等价旧 `restoreToolSettings` 的合成规则）。
+    private static func migratedInputMode(from settings: ToolSettingsStore) -> CanvasInputMode {
+        if settings.lastIsLassoActive { return .lasso }
+        let tool = settings.lastSelectedTool ?? .pen
+        return tool == .eraser ? .eraser : .ink(tool)
     }
 
     /// 换上台面指定笔自己的墨色与笔宽（每支笔独立记忆）。
@@ -282,16 +323,8 @@ final class EditorModel {
         }
         host.canvas.onRequestItemEdit = { [weak self] id, payload in
             guard let self else { return }
-            self.editingItemID = id
-            self.editingItemPayload = payload
-            switch payload {
-            case .text(let config):
-                self.editingTextConfig = config
-                self.isEditingText = true
-            case .shape(let config):
-                self.editingShapeConfig = config
-                self.isEditingShape = true
-            }
+            // 唯一入口：payload 决定会话种类与配置，不再手工同步 6 个平行字段。
+            self.editSession = CanvasEditSession.session(id: id, payload: payload)
         }
         host.canvas.onSaveItemAsSticker = { [weak self] entity in
             self?.saveEntityAsCustomSticker(entity)
@@ -334,6 +367,7 @@ final class EditorModel {
         host.isLeftEdgeEnabled = edgeDoubleTapSettings.left.isEnabled
         host.isRightEdgeEnabled = edgeDoubleTapSettings.right.isEnabled
         host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
+        host.canvas.inputMode = inputMode
         host.canvas.isLassoActive = isLassoActive
         host.canvas.paperStyle = paperStyle
         appliedToolSignature = ""          // 强制首次下发
@@ -344,10 +378,13 @@ final class EditorModel {
         }
     }
 
-    /// 期望状态指纹：工具类型 + 颜色 + 透明度 + 笔宽 + 橡皮模式/大小 + 套索开关。
+    /// 期望状态指纹：**输入模式签名** + 工具载荷（颜色 / 透明度 / 笔宽 / 橡皮配置）。
+    ///
+    /// 模式部分由 `CanvasInputModePolicy.signature(of:)` 纯计算得出（7 态各不相同），
+    /// 不再是两个独立字段的字符串拼接；载荷部分仍需要，因为 `updatePenColor(_:)` 等
+    /// 只改载荷、不改模式，却必须触发重新下发。
     private var toolSignature: String {
-        let tool = activeTool?.rawValue ?? "none"
-        return "\(tool)|\(penColorHex)|\(penOpacity)|\(penWidth)|\(eraserMode.rawValue)|\(eraserWidth)|\(isLassoActive)"
+        "\(CanvasInputModePolicy.signature(of: inputMode))|\(penColorHex)|\(penOpacity)|\(penWidth)|\(eraserMode.rawValue)|\(eraserWidth)"
     }
 
     func syncUIKitState(of host: CanvasHostView?) {
@@ -360,6 +397,9 @@ final class EditorModel {
         }
         if host.canvas.isFingerDrawingEnabled != isFingerDrawingEnabled {
             host.canvas.isFingerDrawingEnabled = isFingerDrawingEnabled
+        }
+        if host.canvas.inputMode != inputMode {
+            host.canvas.inputMode = inputMode
         }
         if host.canvas.isLassoActive != isLassoActive {
             host.canvas.isLassoActive = isLassoActive
@@ -382,15 +422,18 @@ final class EditorModel {
     private func applyTool(on host: CanvasHostView) {
         let baseColor = UIColor(hex: penColorHex) ?? .label
         let color = baseColor.withAlphaComponent(CGFloat(penOpacity))
-        guard let activeTool else {
+        // 导航态：禁止落笔、单指平移（逐位等价旧 `guard let activeTool` 的 setNavigationMode(true) 分支）。
+        guard inputMode.drawsWithFinger else {
             host.setNavigationMode(true)
             host.canvas.isEraserActive = false
             return
         }
         host.setNavigationMode(false)
         host.canvas.eraserWidth = eraserWidth
-        host.canvas.isEraserActive = (activeTool == .eraser)
-        switch activeTool {
+        host.canvas.isEraserActive = (inputMode == .eraser)
+        // 套索态不下发 PencilKit 工具：保持上一支笔不变，落笔由 `isLassoActive` 门控。
+        guard let tool = inputMode.tool else { return }
+        switch tool {
         case .pen:
             host.setTool(PKInkingTool(.pen, color: color, width: penWidth))
         case .monoline:
@@ -423,15 +466,41 @@ final class EditorModel {
     }
 
     func markDirty() {
+        guard let page = currentPage else { return }
+        // 显式方法驱动相位转移（不得依赖 didSet / 属性观察器）。
+        savePhase = SavePolicy.reduce(savePhase, event: .contentChanged(pageUUID: page.uuid))
+        let pageUUID = page.uuid
         saveTask?.cancel()
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: SavePolicy.debounce)
             guard !Task.isCancelled else { return }
-            self?.save()
+            guard let self else { return }
+            // 相位 + 页身份双重校验：只有「仍在为同一页去抖」才允许落盘。
+            // 换页时 `save()` 已经把相位推进过，这次 2 秒后的写盘于是被自然拦下 ——
+            // 这正是「防抖任务误写换页后的另一页」的修法。
+            guard SavePolicy.shouldCommit(phase: self.savePhase, pageUUID: pageUUID) else { return }
+            self.save()
         }
     }
 
+    /// 立即同步落盘。
+    ///
+    /// 相位机纪律（不变量 2）：进入 `.saving(pageUUID:)` → 落盘 → `.saveCompleted`
+    /// 回到 `.clean`，全程不允许把相位留在脏态。换页类操作（`selectPage` / `addPage` /
+    /// `movePages`…）走的就是它 —— 落盘完成后，之前那次去抖任务在 2 秒后到点时，
+    /// `shouldCommit` 会发现相位已不是 `.debouncing`，于是不再重复写盘。
+    ///
+    /// 注意：本方法**刻意不取消**在途去抖任务（取消是 `flushPendingSave` 的职责），
+    /// 重复写盘由相位 + 页身份校验天然消除，而不是靠取消副作用。
     func save() {
+        guard let page = currentPage else { return }
+        savePhase = .saving(pageUUID: page.uuid)
+        saveNow()
+        savePhase = SavePolicy.reduce(savePhase, event: .saveCompleted)
+    }
+
+    /// 真正的同步落盘（不含相位转移，供 `save()` 调用）。
+    private func saveNow() {
         guard let host = canvasHost, let page = currentPage else { return }
         let snapshot = host.canvas.snapshot()
         repository.writeDrawing(snapshot.drawing, for: page)
@@ -552,10 +621,8 @@ final class EditorModel {
     func updateEditedItem(id: UUID, data: Data, payload: CanvasItemPayload) {
         guard let host = canvasHost, let image = UIImage(data: data) else { return }
         host.canvas.updateImageItem(id: id, image: image, payload: payload)
-        editingItemID = nil
-        editingItemPayload = nil
-        isEditingText = false
-        isEditingShape = false
+        // 会话收敛到 .none（等价于旧的 4 个字段逐个清零，但只写一个真值）。
+        editSession = .none
         markDirty()
     }
 
@@ -609,6 +676,8 @@ final class EditorModel {
     func flushPendingSave() {
         saveTask?.cancel()
         saveTask = nil
+        // 先把在途去抖收编为落盘相位（不变量 2：flush 之后必到 .saving）。
+        savePhase = SavePolicy.reduce(savePhase, event: .flushRequested)
         save()
     }
 
@@ -657,22 +726,29 @@ final class EditorModel {
     /// 笔刷 / 自动铅笔 / 马克笔 / 铅笔 / 橡皮 —— 与套索互斥；再次点按当前工具即取消它（进入导航态）。
     /// 同时把目标笔的专属墨色与笔宽换上台面。
     func select(tool: CanvasTool) {
-        let prev = currentActiveToolType
-        if isLassoActive {
-            isLassoActive = false
-        }
-        // 是否"取消选中"看当前工具，换墨色/笔宽看目标工具 —— 两者语义不同，别混用。
-        let next: CanvasTool? = (activeTool == tool) ? nil : tool
+        let prevType = currentActiveToolType
+        let nextMode = CanvasInputModePolicy.selecting(tool: tool, from: inputMode)
+        // 是否“取消选中”看当前模式，换墨色/笔宽看目标工具 —— 两者语义不同，别混用。
         adoptPenSettings(for: tool)
-        activeTool = next
-        settings.lastSelectedTool = next
-        settings.lastIsLassoActive = false
-        if let nextTool = next {
-            let nextTarget = EdgeSwitchTargetTool(rawValue: nextTool.rawValue) ?? .pen
-            if nextTarget != prev {
-                previousToolType = prev
+        // remembered（M13）：只有在「落到某个绘制工具」且目标与上一支不同时才记下上一支；
+        // 取消到导航态（nextMode == .navigation）不动它 —— 逐位等价旧 select 的
+        // `if nextTool != nil && nextTarget != prev`。
+        if nextMode != .navigation {
+            let nextTarget = CanvasInputModePolicy.edgeTarget(of: nextMode)
+            if nextTarget != prevType {
+                previousToolType = prevType
             }
         }
+        applyInputMode(nextMode)
+    }
+
+    /// 输入模式的**唯一应用管线**：应用模式 → 持久化 → 立即下发。
+    ///
+    /// 为什么集中成一处：旧实现把「改哪个字段、写哪份持久化、要不要刷新」散在三处手写代码里，
+    /// 三处的 remembered 规则还各不相同。现在所有转移都经过这里，`inputMode` 是唯一真值。
+    private func applyInputMode(_ mode: CanvasInputMode) {
+        inputMode = mode
+        settings.inputMode = mode
         applyToolImmediately()
     }
 
@@ -721,7 +797,7 @@ final class EditorModel {
     }
 
     /// 是否处于「无工具 / 导航」状态。
-    var isNavigating: Bool { activeTool == nil }
+    var isNavigating: Bool { inputMode == .navigation }
 
     /// 是否选中了单张贴图（用于「锁定选中贴图」菜单项）。
     var isSingleImageSelected: Bool {
@@ -741,14 +817,17 @@ final class EditorModel {
 
     /// 套索 —— 与笔墨工具互斥。
     func toggleLasso() {
-        let prev = currentActiveToolType
-        isLassoActive.toggle()
-        settings.lastIsLassoActive = isLassoActive
-        if isLassoActive && prev != .lasso {
-            previousToolType = prev
-        } else if !isLassoActive {
+        let prevType = currentActiveToolType
+        let nextMode = CanvasInputModePolicy.togglingLasso(from: inputMode)
+        // remembered（M13，与 select 规则**刻意不同**）：进入套索记下进入前的模式，
+        // 退出套索记下「套索」本身 —— 逐位等价旧 toggleLasso 的 if/else。
+        // 不许与 select 统一：否则边缘双击的「切回上一个」手感会变（现网行为）。
+        if nextMode == .lasso {
+            if prevType != .lasso { previousToolType = prevType }
+        } else {
             previousToolType = .lasso
         }
+        applyInputMode(nextMode)
     }
 
     // MARK: - 边缘双击快捷切换
@@ -769,54 +848,39 @@ final class EditorModel {
         let config = (side == .left ? edgeDoubleTapSettings.left : edgeDoubleTapSettings.right)
         guard config.isEnabled else { return }
 
+        let current = currentActiveToolType
+        // 双击会发生什么，全部由纯决策函数给出（不再在两个分支里各自手写 remembered 更新）。
+        let decision = CanvasInputModePolicy.switching(
+            from: inputMode,
+            action: config.mode,
+            remembered: previousToolType,
+            designated: config.designatedTool,
+            savedBeforeDesignated: savedToolBeforeDesignated
+        )
+        previousToolType = decision.remembered
+        savedToolBeforeDesignated = decision.savedBeforeDesignated
+        let target = CanvasInputModePolicy.edgeTarget(of: decision.mode)
+        // 仍走 switchTo，以保留「再点一次取消」的 toggle 语义（逐位等价旧实现）。
+        switchTo(target: target)
         switch config.mode {
         case .switchToPrevious:
-            let current = currentActiveToolType
-            let target = (previousToolType != current) ? previousToolType : (current == .eraser ? .pen : .eraser)
-            previousToolType = current
-            switchTo(target: target)
             toastMessage = "已切换至\(target.title)"
-
         case .switchToDesignated:
-            let current = currentActiveToolType
-            let designated = config.designatedTool
-            if current != designated {
-                savedToolBeforeDesignated = current
-                previousToolType = current
-                switchTo(target: designated)
-                toastMessage = "已切换至\(designated.title)"
-            } else {
-                // 再次双击切回原工具
-                let returnTool = (savedToolBeforeDesignated != designated) ? savedToolBeforeDesignated : .pen
-                previousToolType = current
-                switchTo(target: returnTool)
-                toastMessage = "已切回\(returnTool.title)"
-            }
+            toastMessage = (current != config.designatedTool)
+                ? "已切换至\(target.title)" : "已切回\(target.title)"
         }
     }
 
     func switchTo(target: EdgeSwitchTargetTool) {
         switch target {
         case .lasso:
-            if !isLassoActive {
-                isLassoActive = true
+            // 直接进套索（不 toggle）——逐位等价旧 switchTo(.lasso)：**不更新** previousToolType。
+            applyInputMode(CanvasInputModePolicy.transition(from: inputMode, to: .lasso))
+        case .eraser, .pen, .monoline, .marker, .pencil:
+            // 走 select 的 toggle 语义（逐位等价旧 switchTo 对各笔/橡皮的处理）。
+            if let tool = CanvasTool(rawValue: target.rawValue) {
+                select(tool: tool)
             }
-            settings.lastIsLassoActive = true
-        case .eraser:
-            if isLassoActive { isLassoActive = false }
-            select(tool: .eraser)
-        case .pen:
-            if isLassoActive { isLassoActive = false }
-            select(tool: .pen)
-        case .monoline:
-            if isLassoActive { isLassoActive = false }
-            select(tool: .monoline)
-        case .marker:
-            if isLassoActive { isLassoActive = false }
-            select(tool: .marker)
-        case .pencil:
-            if isLassoActive { isLassoActive = false }
-            select(tool: .pencil)
         }
     }
 

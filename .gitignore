@@ -20,6 +20,13 @@ Payload/
 # macOS
 .DS_Store
 
+# 改动核心文件前的本地备份（AGENTS.md D1 约定：备份至项目根 backups/）
+# 属于本地安全网，不是源码，不应进版本库。
+backups/
+
+# Python 门禁脚本的字节码缓存
+__pycache__/
+
 # Agent skills
 .agents/
 skills-lock.json

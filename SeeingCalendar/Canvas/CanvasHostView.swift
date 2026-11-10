@@ -22,7 +22,20 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     var isLeftEdgeEnabled: Bool = false
     var isRightEdgeEnabled: Bool = false
 
-    private var pullDownEngaged = false
+    /// 下拉返回握手相位的**单一真值**。
+    ///
+    /// 旧实现用一个 `pullDownEngaged: Bool` 同时表示「已起手」与「已提交」，
+    /// 两个语义挤在一个 bool 里，既无法观测「已提交」这一中间态，也无法被穷举测试。
+    /// 现在相位是唯一真值，`pullDownEngaged` 降级为只读投影，调用点零破坏。
+    private(set) var pullDownPhase: PullDownPhase = .idle
+
+    /// 兼容只读投影：严格等价于旧 `pullDownEngaged`（`armed` / `committed` 皆为 true）。
+    var pullDownEngaged: Bool { pullDownPhase.isEngaged }
+
+    /// 下拉返回相位的**唯一写入点**：把事件喂给纯逻辑相位机。
+    private func emitPullDown(_ event: PullDownEvent) {
+        pullDownPhase = PullDownPolicy.reduce(pullDownPhase, event: event)
+    }
 
     private lazy var pullDown: UIPanGestureRecognizer = {
         let gesture = UIPanGestureRecognizer(target: self, action: #selector(handlePullDown(_:)))
@@ -36,15 +49,18 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     @objc private func handlePullDown(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .ended:
-            guard pullDownEngaged else { return }
-            pullDownEngaged = false
             let translation = gesture.translation(in: self)
             let velocity = gesture.velocity(in: self)
-            if translation.y > 90 || velocity.y > 700 {
+            // 提交判定收敛到相位机的唯一 `ended` 分支：
+            // 只有「已起手」才可能落到 .committed，因此不再需要旧的 `guard pullDownEngaged`。
+            emitPullDown(.ended(translationY: translation.y, velocityY: velocity.y))
+            if pullDownPhase == .committed {
+                // 消费掉提交态，回到起点，避免下一次手势继承已提交语义。
+                emitPullDown(.cancelled)
                 onRequestDismiss?()
             }
         case .cancelled, .failed:
-            pullDownEngaged = false
+            emitPullDown(.cancelled)
         default:
             break
         }
@@ -178,11 +194,13 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
         addGestureRecognizer(rightEdgeDoubleTap)
     }
 
-    /// 触控策略同步：当关闭手指书写时，手指负责平移画布（单指即可平移，双指缩放）；
-    /// 只有在开启手指书写且处于绘图态时，才需要双指平移以防误触。
+    /// 触控策略同步：单指归属由 `TouchRoutingPolicy` 决策 ——
+    /// 只有「手指书写开关打开」且「当前输入模式会绘制」才把单指留给画布（外层 pan 需双指）。
     func updatePanTouchesPolicy() {
-        let requiresTwoFingers = canvas.isFingerDrawingEnabled && canvas.isDrawingEnabled
-        scrollView.panGestureRecognizer.minimumNumberOfTouches = requiresTwoFingers ? 2 : 1
+        scrollView.panGestureRecognizer.minimumNumberOfTouches =
+            TouchRoutingPolicy.panMinimumNumberOfTouches(
+                isFingerDrawingEnabled: canvas.isFingerDrawingEnabled,
+                inputMode: canvas.inputMode)
     }
 
     @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
@@ -314,10 +332,16 @@ final class CanvasHostView: UIView, UIScrollViewDelegate, UIGestureRecognizerDel
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === pullDown {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-            guard !isInsidePaper(pan.location(in: self)) else { return false }
+            guard !isInsidePaper(pan.location(in: self)) else {
+                emitPullDown(.shouldBeginRejected)
+                return false
+            }
             let velocity = pan.velocity(in: self)
-            guard velocity.y > abs(velocity.x) else { return false }
-            pullDownEngaged = true
+            guard velocity.y > abs(velocity.x) else {
+                emitPullDown(.shouldBeginRejected)
+                return false
+            }
+            emitPullDown(.shouldBeginAccepted)
             return true
         }
 

@@ -254,8 +254,15 @@ func verifyMigrationAndBackup() {
           "必须有一次性迁移入口")
     check(stackCode.contains("all.filter { $0.workspaceUUID != nil }"),
           "迁移只处理「旧字段非空」的记录 —— 幂等性靠这一点，也靠 setScope 顺手腾空旧字段")
-    check(stackCode.contains("subscription.setScope(subscription.workspaceUUID.map { [$0] } ?? [])"),
+    // 【同步 M16】作用域哨兵的解读已从「内联的 map ?? []」收进 SubscriptionScopeValue.migrating，
+    // 所以这里改为钉新的调用形态 + 一条负向护栏（禁止直接写数组）。
+    // 钉的**不变量**没变：迁移必须走 setScope 而不是直接写数组（顺带腾空旧字段）。
+    check(stackCode.contains("subscription.setScope(migrated.persisted)"),
           "迁移必须走 setScope 而不是直接写数组（顺带腾空旧字段，重复迁移不会把旧值盖回来）")
+    check(stackCode.contains("SubscriptionScopeValue.migrating(legacy: subscription.workspaceUUID"),
+          "作用域哨兵的解读必须集中到 SubscriptionScopeValue.migrating（不要再内联 map ?? []）")
+    check(!stackCode.contains("workspaceUUIDs = "),
+          "★ 迁移不得直接写 workspaceUUIDs 数组 —— 绕开 setScope 就不会腾空旧字段")
 
     guard let app = productionSource("SeeingCalendar/App/SeeingCalendarApp.swift") else {
         check(false, "读不到 SeeingCalendar/App/SeeingCalendarApp.swift")

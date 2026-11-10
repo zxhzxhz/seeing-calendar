@@ -160,10 +160,16 @@ func verifyProductionSourceSync() {
         check(false, "找不到 regenerate(_:page:) 定义")
     }
     if let body = declarationBody(of: "func forget(_ slot: ThumbnailSlot", in: store) {
-        check(body.contains("version &+= 1"),
-              "forget 是内容变更（清空），必须推进代次，否则 EquatableView 不重算")
-        check(body.contains("emptySlots.insert("),
-              "forget 必须打上无内容标记，否则下一轮 primeFromDisk 会拿磁盘陈图把它复活")
+        // 【M3 显式化同步】以下两条字面量随 M3 相位机改动同步：
+        // ① 旧的 `version &+= 1` 与 ② 旧的 `emptySlots.insert(` 都已收进唯一的
+        //   相位折叠 + 代次推进入口 `apply(.forgot, to:)`。`.forgot` 在
+        //   SlotLifecyclePolicy.advancesVersion 里恒为真（代次必然推进），
+        //   相位落到 .confirmedEmpty（取代旧的 emptySlots.insert）。
+        // 语义未变：forget 仍是「推进代次 + 落到确认为空」。
+        check(body.contains("apply(.forgot"),
+              "forget 是内容变更（清空），必须经 apply(.forgot) 推进代次，否则 EquatableView 不重算")
+        check(body.contains(".forgot"),
+              "forget 必须落到 .confirmedEmpty 相位（取代旧 emptySlots.insert），否则会拿磁盘陈图把它复活")
         check(body.contains("removeItem(at: AppPaths.thumbnailURL(fileName))"),
               "forget 必须同时删掉磁盘上那张已知陈旧的 PNG")
     } else {
@@ -173,6 +179,12 @@ func verifyProductionSourceSync() {
     // 只删磁盘 PNG 的话，删页之后月历会一直挂着那一页的旧图且无人刷新。
     check(!store.contains("func invalidate(_ fileName: String)"),
           "★ 不得恢复按文件名失效的 invalidate(fileName:)（它无法收走内存条目）")
+
+    // ── M3 负向护栏：旧的 emptySlots 成员集合必须消失 ──────────────────────
+    // 它的语义（权威确认为空）已被单一真值表 states 的 .confirmedEmpty 相位完全吸收。
+    // 若它回潮，说明「四张表涌现一个状态」的旧形状又回来了。
+    check(!store.contains("private var emptySlots: Set<String> = []"),
+          "★ ThumbnailStore 不得再有 emptySlots 成员集合（语义已被 .confirmedEmpty 相位吸收）")
 
     // ── 冷启动 bug 的真根因护栏：写入 images 必须与推进代次同帧 ─────────────
     //
@@ -644,6 +656,253 @@ func verifyStoreIsolation() {
           "驱动 FakeStore 的验证函数应不少于 7 个，实际 \(storeDriven) 个：脚本结构变了，本护栏要跟着改")
 }
 
+// MARK: - 断言 11：★ M3 缩略图槽位相位机（四张表涌现的状态 → 单表显式状态）
+//
+// 镜像 `SeeingCalendar/Rendering/ThumbnailSlotLifecycle.swift` 的 SlotLifecycle /
+// SlotEvent / SlotLifecyclePolicy。相位名与语义必须与生产一致；漂移由断言 13 的
+// 文本护栏拦截。
+
+enum SlotPhase: Equatable {
+    case unknown
+    case loading
+    case present
+    case confirmedEmpty
+
+    var hasImage: Bool { self == .present }
+    var isConfirmedEmpty: Bool { self == .confirmedEmpty }
+    var needsLoad: Bool { self == .unknown }
+    var blocksReload: Bool { self == .present || self == .loading }
+}
+
+enum SlotEv: Equatable {
+    case loadBegan
+    case loadSucceeded
+    case loadConfirmedEmpty
+    case loadUnavailable
+    case forgot
+    case evicted
+}
+
+/// 镜像生产的桥接枚举 `SlotSettlement`（处置 → 相位事件）。
+enum SlotSettlement: Equatable {
+    case commit
+    case clear
+    case preserve
+}
+
+enum SlotMachine {
+    static func event(for settlement: SlotSettlement) -> SlotEv {
+        switch settlement {
+        case .commit:   return .loadSucceeded
+        case .clear:    return .loadConfirmedEmpty
+        case .preserve: return .loadUnavailable
+        }
+    }
+
+    static func reduce(_ phase: SlotPhase, event: SlotEv) -> SlotPhase {
+        switch event {
+        case .loadBegan:          return phase == .unknown ? .loading : phase
+        case .loadSucceeded:      return .present
+        case .loadConfirmedEmpty: return .confirmedEmpty
+        case .loadUnavailable:    return phase
+        case .forgot:             return .confirmedEmpty
+        case .evicted:            return phase == .present ? .unknown : phase
+        }
+    }
+
+    static func isTerminal(_ phase: SlotPhase) -> Bool {
+        phase == .present || phase == .confirmedEmpty
+    }
+
+    static func advancesVersion(from phase: SlotPhase, event: SlotEv) -> Bool {
+        switch event {
+        case .loadSucceeded, .loadConfirmedEmpty, .forgot:
+            return isTerminal(reduce(phase, event: event))
+        case .loadBegan, .loadUnavailable, .evicted:
+            return false
+        }
+    }
+}
+
+/// 破坏变体：`.loadUnavailable` 会把相位清成 `.unknown` ——
+/// 旧代码里「读不到 == 空 / 一次读盘抖动就擦掉用户的缩略图」的错误形状。
+/// 正确实现必须与它分歧，否则检查器就是退化成恒真的。
+enum BrokenSlotMachine {
+    static func reduce(_ phase: SlotPhase, event: SlotEv) -> SlotPhase {
+        if event == .loadUnavailable { return .unknown }
+        return SlotMachine.reduce(phase, event: event)
+    }
+}
+
+let allSlotPhases: [SlotPhase] = [.unknown, .loading, .present, .confirmedEmpty]
+let allSlotEvents: [SlotEv] = [.loadBegan, .loadSucceeded, .loadConfirmedEmpty,
+                               .loadUnavailable, .forgot, .evicted]
+
+/// 断言 11：相位 × 事件穷举（24 组合）的五条不变量。
+func verifySlotLifecycleMachine() {
+    checkEqual(allSlotPhases.count * allSlotEvents.count, 24,
+               "相位 × 事件必须穷举 24 组合（4 相位 × 6 事件）")
+
+    for phase in allSlotPhases {
+        for event in allSlotEvents {
+            let label = "\(phase) × \(event)"
+            let next = SlotMachine.reduce(phase, event: event)
+
+            // 不变量 1：.loadUnavailable 在任何相位下都不改变相位（读取抖动不得擦图）。
+            if event == .loadUnavailable {
+                checkEqual(next, phase, "★ \(label)：.loadUnavailable 不得改变相位（非破坏）")
+            }
+            // 不变量 2：.evicted 从 .present 回到 .unknown；对其余相位原样返回。
+            if event == .evicted {
+                if phase == .present {
+                    checkEqual(next, .unknown, "★ \(label)：.evicted 必须把 .present 打回 .unknown")
+                } else {
+                    checkEqual(next, phase, "\(label)：.evicted 对非 .present 相位应原样返回")
+                }
+                check(!SlotMachine.advancesVersion(from: phase, event: .evicted),
+                      "★ \(label)：淘汰绝不推进代次")
+            }
+            // 不变量 5：.loading 收到 .loadBegan 幂等。
+            if phase == .loading, event == .loadBegan {
+                checkEqual(next, .loading, "★ \(label)：.loading × .loadBegan 必须幂等")
+            }
+            // .loadBegan 只把 .unknown 抬到 .loading，绝不降级已落定的相位。
+            if event == .loadBegan {
+                let expected: SlotPhase = phase == .unknown ? .loading : phase
+                checkEqual(next, expected, "\(label)：.loadBegan 的落点")
+            }
+            // 结论事件从任何相位都落到对应结论态。
+            if event == .loadSucceeded {
+                checkEqual(next, .present, "\(label)：必须落到 .present")
+            }
+            if event == .loadConfirmedEmpty || event == .forgot {
+                checkEqual(next, .confirmedEmpty, "\(label)：必须落到 .confirmedEmpty")
+            }
+            // 终态与代次的准入一致性：推进代次的转移必须落进终态。
+            if SlotMachine.advancesVersion(from: phase, event: event) {
+                check(SlotMachine.isTerminal(next), "\(label)：推进代次的转移必须落进终态")
+            }
+        }
+    }
+}
+
+/// 断言 12：advancesVersion / needsLoad / blocksReload 的真值表。
+func verifySlotLifecycleTruthTables() {
+    // advancesVersion：恰好 loadSucceeded / loadConfirmedEmpty / forgot 为真。
+    for phase in allSlotPhases {
+        for event in allSlotEvents {
+            let expected = (event == .loadSucceeded
+                            || event == .loadConfirmedEmpty
+                            || event == .forgot)
+            checkEqual(SlotMachine.advancesVersion(from: phase, event: event), expected,
+                       "advancesVersion(\(phase), \(event)) 必须为 \(expected)")
+            if event == .loadUnavailable || event == .evicted {
+                check(!SlotMachine.advancesVersion(from: phase, event: event),
+                      "★ \(event) 不得推进代次（preserve / 淘汰固化的不变量）")
+            }
+        }
+    }
+
+    // needsLoad：恰好 .unknown 为真。
+    for phase in allSlotPhases {
+        checkEqual(phase.needsLoad, phase == .unknown, "needsLoad 必须恰好对 .unknown 为真")
+    }
+    check(SlotPhase.unknown.needsLoad, "★ .unknown 需要发起装载")
+    check(!SlotPhase.loading.needsLoad, "在途不需要发起新装载")
+    check(!SlotPhase.present.needsLoad, "有图不需要装载")
+    check(!SlotPhase.confirmedEmpty.needsLoad, "确认空不需要装载")
+
+    // blocksReload：present / loading 为真。
+    check(SlotPhase.present.blocksReload && SlotPhase.loading.blocksReload,
+          "present / loading 不得重复发起装载")
+    check(!SlotPhase.unknown.blocksReload && !SlotPhase.confirmedEmpty.blocksReload,
+          "unknown / confirmedEmpty 不阻止重载")
+
+    // 处置 → 事件映射。
+    checkEqual(SlotMachine.event(for: .commit), .loadSucceeded, "commit → loadSucceeded")
+    checkEqual(SlotMachine.event(for: .clear), .loadConfirmedEmpty, "clear → loadConfirmedEmpty")
+    checkEqual(SlotMachine.event(for: .preserve), .loadUnavailable, "preserve → loadUnavailable")
+
+    // isTerminal。
+    check(SlotMachine.isTerminal(.present), ".present 是终态")
+    check(SlotMachine.isTerminal(.confirmedEmpty), ".confirmedEmpty 是终态")
+    check(!SlotMachine.isTerminal(.unknown), ".unknown 不是终态")
+    check(!SlotMachine.isTerminal(.loading), ".loading 不是终态")
+}
+
+/// 断言 13：反证 —— 「读不到就清成 .unknown」的破坏变体必须被抓到。
+func verifyBrokenSlotVariantIsCaught() {
+    var diverges = false
+    for phase in allSlotPhases {
+        for event in allSlotEvents {
+            guard event == .loadUnavailable, phase != .unknown else { continue }
+            if SlotMachine.reduce(phase, event: event) != BrokenSlotMachine.reduce(phase, event: event) {
+                diverges = true
+            }
+        }
+    }
+    check(diverges, "★ 「读不到就清成 .unknown」的破坏变体必须与正确实现分歧（检查器不得退化成恒真）")
+
+    let good = SlotMachine.reduce(.present, event: .loadUnavailable)
+    let bad = BrokenSlotMachine.reduce(.present, event: .loadUnavailable)
+    checkEqual(good, .present, "正确实现：.present 遇 .loadUnavailable 必须保留原相位（非破坏）")
+    checkEqual(bad, .unknown, "破坏变体确实会清成 .unknown —— 反证有效")
+    check(good != bad, "正反两实现必须在「有图 + 读不到」上分歧")
+}
+
+/// 断言 14：与生产源码同源（M3 文本护栏）。
+///
+/// 全部用**单行字面量**，绝不使用 `\n` 转义 —— 否则 gate_preflight.py
+/// 处理不了转义、会误报。
+func verifySlotLifecycleSourceSync() {
+    guard let lifecycle = productionSource("SeeingCalendar/Rendering/ThumbnailSlotLifecycle.swift") else {
+        check(false, "读不到生产文件 ThumbnailSlotLifecycle.swift")
+        return
+    }
+    check(lifecycle.contains("enum SlotLifecycle: Equatable, Sendable"),
+          "SlotLifecycle 必须是 Equatable + Sendable 的纯值类型")
+    check(lifecycle.contains("case unknown"), "SlotLifecycle 必须保留 .unknown")
+    check(lifecycle.contains("case loading"), "SlotLifecycle 必须保留 .loading")
+    check(lifecycle.contains("case present"), "SlotLifecycle 必须保留 .present")
+    check(lifecycle.contains("case confirmedEmpty"), "SlotLifecycle 必须保留 .confirmedEmpty")
+    check(lifecycle.contains("var needsLoad: Bool { self == .unknown }"),
+          "needsLoad 必须恰好等价于 .unknown（旧两句前置短路的合并表达）")
+    check(lifecycle.contains("var blocksReload: Bool { self == .present || self == .loading }"),
+          "blocksReload 必须是 present || loading")
+    check(lifecycle.contains("case loadBegan"), "SlotEvent 必须保留 .loadBegan")
+    check(lifecycle.contains("case forgot"), "SlotEvent 必须保留 .forgot")
+    check(lifecycle.contains("case evicted"), "SlotEvent 必须保留 .evicted")
+    check(lifecycle.contains("case .loadUnavailable:"), "reduce 必须保留 .loadUnavailable 事件臂")
+    check(lifecycle.contains("return phase == .unknown ? .loading : phase"),
+          "loadBegan 只允许把 .unknown 抬到 .loading")
+    check(lifecycle.contains("return phase == .present ? .unknown : phase"),
+          "evicted 必须把 .present 打回 .unknown")
+    check(lifecycle.contains("return isTerminal(reduce(phase, event: event))"),
+          "advancesVersion 必须经终态准入判定")
+    check(lifecycle.contains("static func isTerminal(_ phase: SlotLifecycle) -> Bool"),
+          "isTerminal 必须是独立可测的纯函数")
+    check(lifecycle.contains("enum SlotSettlement: Equatable, Sendable"),
+          "必须有独立的桥接枚举 SlotSettlement（相位机不得依赖 ThumbnailLoadPolicy 的类型）")
+    check(lifecycle.contains("static func event(for settlement: SlotSettlement) -> SlotEvent"),
+          "处置 → 相位事件的映射必须是本文件的纯函数")
+    // 纯逻辑：不得 import 任何 UI / 持久化框架。
+    check(!lifecycle.contains("import UIKit"), "相位机不得 import UIKit")
+    check(!lifecycle.contains("import SwiftUI"), "相位机不得 import SwiftUI")
+    check(!lifecycle.contains("import PencilKit"), "相位机不得 import PencilKit")
+    check(!lifecycle.contains("import SwiftData"), "相位机不得 import SwiftData")
+
+    guard let store = productionSource("SeeingCalendar/Store/ThumbnailStore.swift") else {
+        check(false, "读不到生产文件 ThumbnailStore.swift")
+        return
+    }
+    check(store.contains("private var states: [String: SlotLifecycle] = [:]"),
+          "★ ThumbnailStore 必须以 states 相位表作单一真值表")
+    check(store.contains("SlotLifecyclePolicy.event(for: settlement(of: disposition))"),
+          "settle 必须经相位机的事件映射落地")
+    check(store.contains("states[slot.storageKey]?.isConfirmedEmpty ?? false"),
+          "isConfirmedEmpty 必须降级为 states 的只读投影")
+}
+
 // MARK: - 运行
 
 verifyProductionSourceSync()
@@ -657,6 +916,10 @@ await verifyNonDestructiveOnUnavailable()
 verifyGridLayoutPremise()
 await verifyNoStaleResurrectionDuringRegenerate()
 verifyStoreIsolation()
+verifySlotLifecycleMachine()
+verifySlotLifecycleTruthTables()
+verifyBrokenSlotVariantIsCaught()
+verifySlotLifecycleSourceSync()
 
 let strict = CommandLine.arguments.contains("--strict")
 if failures.isEmpty {

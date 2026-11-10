@@ -52,16 +52,23 @@ final class DayRecord {
     }
 
     var orderedPages: [DrawingPage] {
-        pages.sorted { $0.index < $1.index }
+        PageOrderPolicy.sorted(pages, index: \.index)
     }
 
     /// 与 `pages.count` 对齐（关系变化后调用）。
+    ///
+    /// 保留公开方法：唯一漏斗在 `PageRepository.commitPageOrder`，但别处仍可能需要
+    /// 手动对齐（例如导入 / 恢复后）。判定与排序一律走 `PageOrderPolicy`。
     func syncPageCount() {
         pageCount = pages.count
     }
 
+    /// 封面 = `index` 最小的页。
+    ///
+    /// 判定收敛到 `PageOrderPolicy.coverIndex`：历史事故（memory #259）正是这里
+    /// 按「数组第一个」而不是「index 最小」取封面，页序乱序时就会选错封面。
     var coverPage: DrawingPage? {
-        orderedPages.first
+        PageOrderPolicy.coverIndex(in: pages, index: \.index)
     }
 
     var date: Date? {
@@ -251,6 +258,14 @@ final class ICSSubscription {
     /// 假期类订阅不参与日格胶囊绘制（只驱动班休样式与角标），但仍会出现在抽屉里。
     var isHolidaySource: Bool { bundledSource != nil }
 
+    /// 作用域的类型化视图（**空数组 = 全局**）。
+    ///
+    /// 持久化仍是 `workspaceUUIDs`（**不改 schema**）；业务逻辑读这里，
+    /// 不再各自解读哨兵（哨兵的解读集中在 `SubscriptionScopeValue.init(persisted:)`）。
+    var scope: SubscriptionScopeValue {
+        SubscriptionScopeValue(persisted: workspaceUUIDs)
+    }
+
     /// 该订阅的日程是否出现在指定维度里。
     ///
     /// 判定规则与事件快照共用 `SubscriptionScope`，不在这里复述一遍：
@@ -261,10 +276,18 @@ final class ICSSubscription {
 
     /// 作用域的唯一写入入口（全局传空数组）。
     ///
+    /// 哨兵解读走类型化视图：空数组 = 全局（落回空数组）。非空作用域**原样保存**，
+    /// 因为展示层按调用方给定的顺序拼维度名（`scope.persisted` 由 Set 支撑、不保序）。
+    ///
     /// 顺手把旧字段清掉：迁移的幂等性就靠这一点 —— 迁移只处理「旧字段非空」的记录，
     /// 而任何一次新的写入都已经把旧字段腾空了，重复迁移不会把旧值又盖回来。
     func setScope(_ scope: [UUID]) {
-        workspaceUUIDs = scope
+        switch SubscriptionScopeValue(persisted: scope) {
+        case .global:
+            workspaceUUIDs = []
+        case .scoped:
+            workspaceUUIDs = scope
+        }
         workspaceUUID = nil
     }
 

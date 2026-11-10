@@ -61,6 +61,11 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     /// 结束选区：浮动笔迹合并回画布，贴图留位，清空手柄与菜单。
+    ///
+    /// `notify` 现在**只**控制是否对外回调 `onSelectionChange`：无论传什么，相位都会在
+    /// `notifySelection(broadcast:)` 里被**重新推导**。旧实现在 `notify == false` 时
+    /// 改走 `selectionKind = .none` + `selectionOverlay.update(mode: .none)` 直写旁路
+    /// —— 那正是相位第二、第三个写者的来源。
     func commitSelection(notify: Bool = true) {
         if !selectedStrokes.isEmpty {
             var drawing = canvasView.drawing
@@ -73,13 +78,8 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         selectedImageIDs = []
         isGroupTransforming = false
         croppingImageID = nil
-        gestureBaseTransform = nil
-        if notify {
-            notifySelection()
-        } else {
-            selectionKind = .none
-            selectionOverlay.update(mode: .none)
-        }
+        gestureScratch = .none
+        notifySelection(broadcast: notify)
     }
 
     func clearSelection() {
@@ -91,16 +91,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         selectedStrokes = []
         selectedImageIDs = []
         isGroupTransforming = false
-        isAdjustingSelection = false
+        noteInteraction(.selectionAdjustingEnded)
         croppingImageID = nil
-        cropBase = nil
-        gestureBaseTransform = nil
-        groupAccumulatedDelta = nil
-        groupBaseTransforms = [:]
+        gestureScratch = .none
         removeFloatingPreview()
         releaseElevatedSelection()
-        selectionKind = .none
-        selectionOverlay.update(mode: .none)
+        // 不对外广播（调用方通常随后自带一次 notifySelection()），但真值与覆盖层照常更新。
+        notifySelection(broadcast: false)
     }
 
     /// 选区包围盒。
@@ -117,7 +114,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         }
         if !selectedStrokes.isEmpty {
             var box = strokesBounds(selectedStrokes)
-            if let delta = groupAccumulatedDelta, !box.isNull {
+            if let delta = gestureScratch.accumulatedDelta, !box.isNull {
                 box = box.applying(delta)   // 视觉上的当前位置
             }
             if !box.isNull { result = result.isNull ? box : result.union(box) }
@@ -144,7 +141,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     func refreshSelectionOverlay() {
         let mode = overlayMode()
-        if isAdjustingSelection {
+        if !interactionPhase.allowsOverlayRebuild {
             // 拖拽（手柄 / 贴图位移 / 整体变换）过程中只更新几何：
             // 既不重建手柄（会打断进行中的手势），也不重弹菜单（避免每帧弹窗的 CPU 尖峰）。
             selectionOverlay.updateGeometry(mode)
@@ -226,7 +223,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                           state: UIGestureRecognizer.State) {
         switch state {
         case .began:
-            isAdjustingSelection = true
+            noteInteraction(.selectionAdjustingBegan)
             // 同样不在拖拽开始时收起菜单：会中断进行中的触摸（见 onBeginMove 注释）。
             beginHandleGesture(kind, point: point)
         case .changed:
@@ -244,26 +241,35 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
         switch kind {
         case .imageCorner, .imageEdge, .imageRotate:
             guard let id = effectiveImageID, let entity = entity(for: id) else { return }
-            gestureBaseTransform = entity.worldTransform
             if case .imageEdge = kind {
                 // 边手柄 = 直接进入裁剪
                 croppingImageID = id
-                cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
+                gestureScratch = .crop(crop: entity.cropRect,
+                                       transform: entity.worldTransform,
+                                       natural: entity.naturalSize)
             } else if isCropping {
-                cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
+                gestureScratch = .crop(crop: entity.cropRect,
+                                       transform: entity.worldTransform,
+                                       natural: entity.naturalSize)
             } else {
-                cropBase = nil
+                // 缩放 / 旋转手势只需要基准变换。
+                gestureScratch = .moveImage(base: entity.worldTransform)
             }
 
         case .groupCorner, .groupRotate:
-            gestureBaseTransform = .identity
-            groupBaseBounds = selectionBounds()
-            groupBaseTransforms = imageViews.reduce(into: [:]) { partial, view in
-                if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }
-            }
+            gestureScratch = .group(bounds: selectionBounds(),
+                                    transforms: groupBaseTransformsSnapshot(),
+                                    accumulated: nil)
         }
         // 变换前的状态必须先入栈，保证缩放/旋转/裁剪可撤销。
         pushHistory()
+    }
+
+    /// 采集当前选中贴图的基准世界变换（整体变换手势的基准）。
+    private func groupBaseTransformsSnapshot() -> [UUID: CGAffineTransform] {
+        imageViews.reduce(into: [:]) { partial, view in
+            if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }
+        }
     }
 
     private func updateHandleGesture(_ kind: SelectionHandleKind, point: CGPoint) {
@@ -286,25 +292,23 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func endHandleGesture(_ kind: SelectionHandleKind) {
-        isAdjustingSelection = false
+        noteInteraction(.selectionAdjustingEnded)
         switch kind {
         case .imageCorner, .imageRotate:
             // 单图态本身不是"模式"，无需处理变形态标志。
-            cropBase = nil
+            gestureScratch = .none
         case .imageEdge:
             // 保持裁剪态，等待用户点“完成裁剪”；下次手势会重新采集基准。
-            cropBase = nil
+            gestureScratch = .none
         case .groupCorner, .groupRotate:
-            if let delta = groupAccumulatedDelta, delta != .identity {
+            if let delta = gestureScratch.accumulatedDelta, delta != .identity {
                 bakeStrokes(delta: delta)
             }
-            groupAccumulatedDelta = nil
-            groupBaseTransforms = [:]
+            gestureScratch = .none
             // 注意：这里**不清除** isGroupTransforming —— 变形态是"模式"，
             // 退出只能由用户动作触发（点选区内保持并弹菜单 / 点选区外退出 / 点"完成变形"）。
             // 此前在每次缩放/旋转结束时清除，导致"做一次操作就掉出变形态"。
         }
-        gestureBaseTransform = nil
         notifySelection()
         onContentChange?()
     }
@@ -316,7 +320,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     private func applyImageCornerScale(index: Int, point: CGPoint) {
         guard let id = effectiveImageID,
               let entity = entity(for: id),
-              let base = gestureBaseTransform else { return }
+              let base = gestureScratch.baseTransform else { return }
         let baseInverse = base.inverted()
         let size = entity.visibleSize
         let centerLocal = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -344,7 +348,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     private func applyImageRotation(point: CGPoint) {
         guard let id = effectiveImageID,
               let entity = entity(for: id),
-              let base = gestureBaseTransform else { return }
+              let base = gestureScratch.baseTransform else { return }
         let center = base.applied(to: CGPoint(x: entity.visibleSize.width / 2, y: entity.visibleSize.height / 2))
         let startAngle = atan2(gestureBasePoint.y - center.y, gestureBasePoint.x - center.x)
         let currentAngle = atan2(point.y - center.y, point.x - center.x)
@@ -364,7 +368,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     private func applyCrop(_ handle: CropHandle, point: CGPoint) {
         guard let id = effectiveImageID, let entity = entity(for: id) else { return }
-        let base = cropBase ?? (entity.cropRect, entity.worldTransform, entity.naturalSize)
+        let base = gestureScratch.cropBase ?? (entity.cropRect, entity.worldTransform, entity.naturalSize)
         let baseInverse = base.transform.inverted()
         let pointLocal = point.applying(baseInverse)
         // 当前图层局部空间 → 原图像像素空间
@@ -438,7 +442,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     /// 整体缩放：**以套索确定的整体选中区域中心为不动点**，等比缩放，
     /// 手柄只决定缩放比例（把手指位移投影到「中心 → 手柄」这条轴上），行为与贴图缩放一致。
     private func applyGroupScale(index: Int, point: CGPoint) {
-        let base = groupBaseBounds
+        let base = gestureScratch.groupBounds
         guard !base.isNull else { return }
         let center = CGPoint(x: base.midX, y: base.midY)
         let origin = groupHandlePoint(index, in: base)
@@ -454,7 +458,7 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func applyGroupRotation(point: CGPoint) {
-        let base = groupBaseBounds
+        let base = gestureScratch.groupBounds
         guard !base.isNull else { return }
         let center = CGPoint(x: base.midX, y: base.midY)
         let startAngle = atan2(gestureBasePoint.y - center.y, gestureBasePoint.x - center.x)
@@ -464,9 +468,13 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
     }
 
     private func applyGroupDelta(_ delta: CGAffineTransform) {
-        groupAccumulatedDelta = delta
+        // 基准来自当前 `.group` 暂存；把累计 delta 原位写回（bounds / transforms 原样保留）。
+        let transforms = gestureScratch.groupTransforms
+        gestureScratch = .group(bounds: gestureScratch.groupBounds,
+                                transforms: transforms,
+                                accumulated: delta)
         isGroupTransforming = true
-        for (id, base) in groupBaseTransforms {
+        for (id, base) in transforms {
             // 整体变换是世界坐标系的 delta（组锚点不动）→ 先 base 后 delta。
             entity(for: id)?.update(transform: base.applyingWorldDelta(delta))
         }
@@ -485,23 +493,21 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
                           state: UIGestureRecognizer.State) {
         switch state {
         case .began:
-            isAdjustingSelection = true
-            groupBaseBounds = selectionBounds()
-            groupBaseTransforms = imageViews.reduce(into: [:]) { partial, view in
-                if selectedImageIDs.contains(view.itemID) { partial[view.itemID] = view.worldTransform }
-            }
+            noteInteraction(.selectionAdjustingBegan)
+            gestureScratch = .group(bounds: selectionBounds(),
+                                    transforms: groupBaseTransformsSnapshot(),
+                                    accumulated: nil)
             gestureBasePoint = point
             pushHistory()
         case .changed:
             let delta = CGPoint(x: point.x - gestureBasePoint.x, y: point.y - gestureBasePoint.y)
             applyGroupDelta(CGAffineTransform.worldTranslation(delta))
         case .ended, .cancelled, .failed:
-            isAdjustingSelection = false
-            if let delta = groupAccumulatedDelta, delta != .identity {
+            noteInteraction(.selectionAdjustingEnded)
+            if let delta = gestureScratch.accumulatedDelta, delta != .identity {
                 bakeStrokes(delta: delta)
             }
-            groupAccumulatedDelta = nil
-            groupBaseTransforms = [:]
+            gestureScratch = .none
             notifySelection()
             onContentChange?()
         default:
@@ -531,9 +537,10 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
 
     /// 选区动作总入口：浮动菜单与编辑器底部工具条共用同一条实现。
     func perform(_ action: SelectionAction) {
-        // 原生菜单退场可能把触摸透传到画布，这里登记 0.35s 保护窗口，
-        // 避免刚建立的选择状态被「点空白取消选中」立刻清掉。
-        menuActionGuardUntil = Date().addingTimeInterval(0.35)
+        // 原生菜单退场可能把触摸透传到画布，这里进入 `.coasting` 冷却相位，
+        // 避免刚建立的选择状态被「点空白取消选中」立刻清掉；
+        // 冷却由触摸生命周期驱动（消费掉一次透传点击即回 open），不再用挂钟时间。
+        noteMenuActionSelected()
         switch action {
         case .edit:
             guard let id = selectedImageIDs.first, let entity = entity(for: id), let payload = entity.payload else { return }
@@ -549,29 +556,31 @@ extension CompositeCanvasContainerView: SelectionOverlayDelegate {
             isGroupTransforming = true
             notifySelection()
         case .finishTransform:
-            if let delta = groupAccumulatedDelta, delta != .identity {
+            if let delta = gestureScratch.accumulatedDelta, delta != .identity {
                 bakeStrokes(delta: delta)
             }
-            groupAccumulatedDelta = nil
+            gestureScratch = .none
             isGroupTransforming = false
             notifySelection()
             onContentChange?()
         case .crop:
             guard let id = selectedImageIDs.first, let entity = entity(for: id) else { return }
             croppingImageID = id
-            cropBase = (entity.cropRect, entity.worldTransform, entity.naturalSize)
+            gestureScratch = .crop(crop: entity.cropRect,
+                                   transform: entity.worldTransform,
+                                   natural: entity.naturalSize)
             notifySelection()
         case .finishCrop:
             croppingImageID = nil
-            cropBase = nil
+            gestureScratch = .none
             notifySelection()
             onContentChange?()
         case .cancelCrop:
-            if let base = cropBase, let id = croppingImageID, let entity = entity(for: id) {
+            if let base = gestureScratch.cropBase, let id = croppingImageID, let entity = entity(for: id) {
                 entity.update(cropRect: base.crop, worldTransform: base.transform)
             }
             croppingImageID = nil
-            cropBase = nil
+            gestureScratch = .none
             notifySelection()
         case .replace:
             guard let id = selectedImageIDs.first else { return }

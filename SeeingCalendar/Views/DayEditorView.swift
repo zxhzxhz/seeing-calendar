@@ -18,18 +18,18 @@ struct DayEditorView: View {
     @State private var model: EditorModel
     @State private var photoItem: PhotosPickerItem?
     @State private var replacementItem: PhotosPickerItem?
-    @State private var isCameraPresented = false
-    @State private var isFileImporterPresented = false
-    @State private var isClearConfirmPresented = false
-    @State private var isDeletePageConfirmPresented = false
-    @State private var isColorPickerPresented = false
-    @State private var isPageManagerPresented = false
-    @State private var isWeatherSheetPresented = false
-    @State private var isAddTextPresented = false
-    @State private var isAddStickerPresented = false
-    @State private var isAddSignaturePresented = false
-    @State private var isAddShapePresented = false
-    @State private var isEdgeDoubleTapSettingsPresented = false
+    /// 当前在屏的模态路由（至多一个）。
+    ///
+    /// 旧实现用 13 个平行布尔表达「哪个模态在屏」，它们可以任意同真；SwiftUI 遇到
+    /// 多个 sheet 同真时会静默丢一个 —— 用户看到的是「点了没反应」。收敛成单一
+    /// `Optional` 之后，「至多一个模态在屏」变成类型事实。
+    @State private var sheetRoute: EditorSheetRoute?
+    /// 非模态确认框路由（与模态互斥性无关，单独管理）。
+    @State private var dialogRoute: EditorDialogRoute?
+    /// 相册选择路由：`importNew` 新建导入、`replaceExisting` 原地替换。
+    @State private var photoRoute: PhotoPickerRoute = .none
+    /// 调色盘 popover 的显隐（toggle 语义，独立于互斥模态）。
+    @State private var colorRoute: ColorPickerRoute = .hidden
     @Namespace private var pageStripNamespace
 
     init(day: DayRecord,
@@ -56,7 +56,7 @@ struct DayEditorView: View {
             .onAppear {
                 model.onRequestDismiss = { dismiss() }
                 model.onRequestToggleColorPicker = {
-                    isColorPickerPresented.toggle()
+                    colorRoute.toggle()
                 }
             }
             .task {
@@ -96,8 +96,13 @@ struct DayEditorView: View {
                 onFingerDrawingChanged(model.isFingerDrawingEnabled)
             }
         }
-        .photosPicker(isPresented: photoPickerBinding(model: model), selection: $photoItem, matching: .images)
-        .photosPicker(isPresented: replacementPickerBinding(model: model), selection: $replacementItem, matching: .images)
+        // 相册选择：两个 `photosPicker` 的 `isPresented` 统一由 `photoRoute` 单点决定
+        // （新建导入 → `.importNew`，原地替换 → `.replaceExisting`）。
+        // 之所以仍保留两次调用而非合并成一次，是因为二者的 `selection` 绑定不同
+        // （`photoItem` 用于新建、`replacementItem` 用于替换），无法共用；
+        // 但「谁在屏」这一决策已经从两个布尔收敛到 `photoRoute` 一处。
+        .photosPicker(isPresented: importPickerBinding, selection: $photoItem, matching: .images)
+        .photosPicker(isPresented: replacementPickerBinding, selection: $replacementItem, matching: .images)
         .onChange(of: photoItem) { _, newValue in
             guard let newValue else { return }
             Task { await importPicked(newValue, model: model) }
@@ -106,100 +111,197 @@ struct DayEditorView: View {
             guard let newValue else { return }
             Task { await importReplacement(newValue, model: model) }
         }
-        .fullScreenCover(isPresented: $isCameraPresented) {
+        // `EditorModel` 侧的「原地替换」请求（`onRequestImageReplace` 置位 `isReplacingImage`）
+        // 收敛到路由：这是消除 `!model.isReplacingImage && isPhotoPickerRequested`
+        // 这个跨所有者的交叉条件的直接修法。
+        .onChange(of: model.isReplacingImage) { _, newValue in
+            if newValue {
+                photoRoute = .replaceExisting
+            } else if photoRoute == .replaceExisting {
+                photoRoute = .none
+            }
+        }
+        .fullScreenCover(item: cameraBinding(model: model)) { _ in
             CameraPicker { image in
                 if let data = image.jpegData(compressionQuality: 0.94) {
                     model.importImage(data: data, fileExtension: "jpg")
                 }
             }
         }
-        .fileImporter(isPresented: $isFileImporterPresented, allowedContentTypes: [.image]) { result in
+        .fileImporter(isPresented: fileImporterBinding(model: model), allowedContentTypes: [.image]) { result in
             if case .success(let url) = result {
                 model.importImage(fromURL: url)
             }
         }
-        .sheet(isPresented: $isPageManagerPresented) {
-            PageManagerSheet(model: model)
+        // 单一 `.sheet(item:)` + switch：这是「至多一个模态在屏」的类型化落点 ——
+        // 只有一个 sheet 修饰器，它同一时刻只能持有一个路由。旧实现的 9 个独立
+        // `.sheet(isPresented:)` 可以同时为真，SwiftUI 会静默丢一个。
+        .sheet(item: sheetPresentationBinding(model: model)) { route in
+            switch route {
+            case .pageManager:
+                PageManagerSheet(model: model)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+
+            case .weather:
+                WeatherLocationSheet(date: model.date)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+
+            case .addText:
+                AddTextSheet { data, config in
+                    model.importImage(data: data, fileExtension: "png", payload: .text(config))
+                }
+
+            case .addSticker:
+                AddStickerSheet { data in
+                    model.importImage(data: data, fileExtension: "png")
+                }
+
+            case .addSignature:
+                AddSignatureSheet { data in
+                    model.importImage(data: data, fileExtension: "png")
+                }
+
+            case .addShape:
+                AddShapeSheet { data, config in
+                    model.importImage(data: data, fileExtension: "png", payload: .shape(config))
+                }
+
+            case .editText:
+                AddTextSheet(initialConfig: model.editingTextConfig) { data, config in
+                    if let id = model.editingItemID {
+                        model.updateEditedItem(id: id, data: data, payload: .text(config))
+                    }
+                }
+
+            case .editShape:
+                AddShapeSheet(initialConfig: model.editingShapeConfig) { data, config in
+                    if let id = model.editingItemID {
+                        model.updateEditedItem(id: id, data: data, payload: .shape(config))
+                    }
+                }
+
+            case .edgeDoubleTapSettings:
+                EdgeDoubleTapSettingsSheet(settings: model.edgeDoubleTapSettings) { newSettings in
+                    model.updateEdgeDoubleTapSettings(newSettings)
+                }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $isWeatherSheetPresented) {
-            WeatherLocationSheet(date: model.date)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $isAddTextPresented) {
-            AddTextSheet { data, config in
-                model.importImage(data: data, fileExtension: "png", payload: .text(config))
+
+            case .camera, .fileImporter:
+                // camera 走 fullScreenCover、fileImporter 走 .fileImporter，
+                // 不会经由这张 sheet 呈现；分支保留只为穷尽 switch。
+                EmptyView()
             }
         }
-        .sheet(isPresented: $isAddStickerPresented) {
-            AddStickerSheet { data in
-                model.importImage(data: data, fileExtension: "png")
-            }
-        }
-        .sheet(isPresented: $isAddSignaturePresented) {
-            AddSignatureSheet { data in
-                model.importImage(data: data, fileExtension: "png")
-            }
-        }
-        .sheet(isPresented: $isAddShapePresented) {
-            AddShapeSheet { data, config in
-                model.importImage(data: data, fileExtension: "png", payload: .shape(config))
-            }
-        }
-        .sheet(isPresented: editTextBinding(model: model)) {
-            AddTextSheet(initialConfig: model.editingTextConfig) { data, config in
-                if let id = model.editingItemID {
-                    model.updateEditedItem(id: id, data: data, payload: .text(config))
-                }
-            }
-        }
-        .sheet(isPresented: editShapeBinding(model: model)) {
-            AddShapeSheet(initialConfig: model.editingShapeConfig) { data, config in
-                if let id = model.editingItemID {
-                    model.updateEditedItem(id: id, data: data, payload: .shape(config))
-                }
-            }
-        }
-        .sheet(isPresented: $isEdgeDoubleTapSettingsPresented) {
-            EdgeDoubleTapSettingsSheet(settings: model.edgeDoubleTapSettings) { newSettings in
-                model.updateEdgeDoubleTapSettings(newSettings)
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: $isClearConfirmPresented, titleVisibility: .visible) {
+        .confirmationDialog("确认清空当前页所有笔迹与贴图？", isPresented: clearConfirmBinding, titleVisibility: .visible) {
             Button("清空当前页", role: .destructive) { model.clearPage() }
             Button("取消", role: .cancel) {}
         }
-        .confirmationDialog("删除当前页？该页笔迹与贴图将不可恢复。", isPresented: $isDeletePageConfirmPresented, titleVisibility: .visible) {
+        .confirmationDialog("删除当前页？该页笔迹与贴图将不可恢复。", isPresented: deletePageConfirmBinding, titleVisibility: .visible) {
             Button("删除 Page \(model.pageIndex + 1)", role: .destructive) { model.deleteCurrentPage() }
             Button("取消", role: .cancel) {}
         }
     }
 
-    private func photoPickerBinding(model: EditorModel) -> Binding<Bool> {
-        Binding(get: { model.isReplacingImage == false && isPhotoPickerRequested },
-                set: { isPhotoPickerRequested = $0 })
+    // MARK: - 模态路由
+
+    /// 当前应当呈现的路由：视图本地路由优先；本地未设时回落到由 `EditorModel` 会话
+    /// 派生的二次编辑模态（`.editText` / `.editShape`）。这是读取端 —— 无论来源，
+    /// 同一时刻只可能返回一个 case，「编辑文本」与「编辑形状」不可能同屏。
+    private func effectiveSheetRoute(model: EditorModel) -> EditorSheetRoute? {
+        if let local = sheetRoute { return local }
+        return EditorSheetRoutingPolicy.derivedRoute(isEditingText: model.isEditingText,
+                                                     isEditingShape: model.isEditingShape)
     }
 
-    private func replacementPickerBinding(model: EditorModel) -> Binding<Bool> {
-        Binding(get: { model.isReplacingImage },
-                set: { model.isReplacingImage = $0 })
+    /// 模态呈现的唯一入口。
+    ///
+    /// 异路由请求一律拒绝（先关再开由调用方显式做）—— 这是 `accepts` 里
+    /// 「至多一个模态在屏」的落地：旧实现直接 `isXxxPresented = true`，
+    /// 两个布尔同真时 SwiftUI 会静默丢一个。
+    private func present(_ route: EditorSheetRoute, model: EditorModel) {
+        guard EditorSheetRoutingPolicy.accepts(current: effectiveSheetRoute(model: model),
+                                               requested: route) else { return }
+        sheetRoute = route
     }
 
-    private func editTextBinding(model: EditorModel) -> Binding<Bool> {
-        Binding(get: { model.isEditingText },
-                set: { model.isEditingText = $0 })
+    /// 关闭当前路由：清空视图本地路由；若在屏的是由 model 派生的二次编辑模态，
+    /// 还需把会话回写为 `.none`（`requiresModelCleanup` 为真）——
+    /// 这等价于旧实现的 `model.isEditingText = false` 回写。
+    private func clearSheetRoute(model: EditorModel) {
+        if let effective = effectiveSheetRoute(model: model),
+           EditorSheetRoutingPolicy.requiresModelCleanup(effective) {
+            if effective == .editText { model.isEditingText = false }
+            if effective == .editShape { model.isEditingShape = false }
+        }
+        sheetRoute = nil
     }
 
-    private func editShapeBinding(model: EditorModel) -> Binding<Bool> {
-        Binding(get: { model.isEditingShape },
-                set: { model.isEditingShape = $0 })
+    /// `.sheet(item:)` 的呈现绑定：过滤掉走 fullScreenCover / fileImporter 的两个路由。
+    private func sheetPresentationBinding(model: EditorModel) -> Binding<EditorSheetRoute?> {
+        Binding(get: {
+            guard let route = effectiveSheetRoute(model: model) else { return nil }
+            switch route {
+            case .camera, .fileImporter: return nil
+            default: return route
+            }
+        }, set: { newValue in
+            if let newValue { sheetRoute = newValue } else { clearSheetRoute(model: model) }
+        })
     }
 
-    @State private var isPhotoPickerRequested = false
+    /// `fullScreenCover` 的呈现绑定（只认 `.camera`）。
+    private func cameraBinding(model: EditorModel) -> Binding<EditorSheetRoute?> {
+        Binding(get: { effectiveSheetRoute(model: model) == .camera ? .camera : nil },
+                set: { newValue in
+                    if let newValue { sheetRoute = newValue } else { clearSheetRoute(model: model) }
+                })
+    }
+
+    /// `.fileImporter` 的呈现绑定（只认 `.fileImporter`）。
+    private func fileImporterBinding(model: EditorModel) -> Binding<Bool> {
+        Binding(get: { effectiveSheetRoute(model: model) == .fileImporter },
+                set: { isPresented in
+                    if isPresented { present(.fileImporter, model: model) } else { clearSheetRoute(model: model) }
+                })
+    }
+
+    /// 非模态确认框的呈现绑定（与模态互斥性无关，单独管 `dialogRoute`）。
+    private var clearConfirmBinding: Binding<Bool> {
+        Binding(get: { dialogRoute == .clearPageConfirm },
+                set: { dialogRoute = $0 ? .clearPageConfirm : nil })
+    }
+
+    private var deletePageConfirmBinding: Binding<Bool> {
+        Binding(get: { dialogRoute == .deletePageConfirm },
+                set: { dialogRoute = $0 ? .deletePageConfirm : nil })
+    }
+
+    /// 调色盘 popover 的呈现绑定（toggle 语义，独立于互斥模态）。
+    private var colorPickerBinding: Binding<Bool> {
+        Binding(get: { colorRoute == .presented },
+                set: { colorRoute = $0 ? .presented : .hidden })
+    }
+
+    /// 「新建导入」相册选择的呈现绑定。
+    private var importPickerBinding: Binding<Bool> {
+        Binding(get: { photoRoute == .importNew },
+                set: { photoRoute = $0 ? .importNew : .none })
+    }
+
+    /// 「原地替换」相册选择的呈现绑定：进入由 `model.isReplacingImage` 驱动
+    /// （见 `.onChange(of: model.isReplacingImage)`），关闭时同时回写 model。
+    private var replacementPickerBinding: Binding<Bool> {
+        Binding(get: { photoRoute == .replaceExisting },
+                set: { isPresented in
+                    if !isPresented {
+                        photoRoute = .none
+                        model.isReplacingImage = false
+                    }
+                })
+    }
 
     // MARK: - 页面条
 
@@ -271,7 +373,7 @@ struct DayEditorView: View {
                 .buttonStyle(.plain)
 
                 Button {
-                    isPageManagerPresented = true
+                    present(.pageManager, model: model)
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                         .font(.system(size: 12, weight: .bold))
@@ -395,7 +497,7 @@ struct DayEditorView: View {
                 }
 
                 Button {
-                    isColorPickerPresented.toggle()
+                    colorRoute.toggle()
                 } label: {
                     if model.activeTool == .eraser {
                         Image(systemName: model.eraserMode.symbol)
@@ -415,7 +517,7 @@ struct DayEditorView: View {
                     }
                 }
                 .accessibilityLabel(model.activeTool == .eraser ? "橡皮设置" : "墨色与笔宽")
-                .popover(isPresented: $isColorPickerPresented, arrowEdge: .bottom) {
+                .popover(isPresented: colorPickerBinding, arrowEdge: .bottom) {
                     penSettings(model: model)
                 }
             }
@@ -461,25 +563,25 @@ struct DayEditorView: View {
             // 添加元素菜单
             Menu {
                 Button {
-                    isAddTextPresented = true
+                    present(.addText, model: model)
                 } label: {
                     Label("添加文本", systemImage: "character.textbox")
                 }
 
                 Button {
-                    isAddStickerPresented = true
+                    present(.addSticker, model: model)
                 } label: {
                     Label("添加贴纸", systemImage: "face.smiling")
                 }
 
                 Button {
-                    isAddSignaturePresented = true
+                    present(.addSignature, model: model)
                 } label: {
                     Label("添加签名", systemImage: "signature")
                 }
 
                 Button {
-                    isAddShapePresented = true
+                    present(.addShape, model: model)
                 } label: {
                     Label("添加形状", systemImage: "square.on.circle")
                 }
@@ -487,7 +589,7 @@ struct DayEditorView: View {
                 Divider()
 
                 Button {
-                    isPhotoPickerRequested = true
+                    photoRoute = .importNew
                 } label: {
                     Label("添加照片", systemImage: "photo")
                 }
@@ -749,7 +851,7 @@ struct DayEditorView: View {
     private func toolbarContent(model: EditorModel) -> some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Button {
-                isWeatherSheetPresented = true
+                present(.weather, model: model)
             } label: {
                 HStack(spacing: 6) {
                     Text(CalendarUtils.dayTitle(model.date))
@@ -796,7 +898,7 @@ struct DayEditorView: View {
             Menu {
                 Section("手势与快捷操作") {
                     Button {
-                        isEdgeDoubleTapSettingsPresented = true
+                        present(.edgeDoubleTapSettings, model: model)
                     } label: {
                         Label("边缘双击快捷切换", systemImage: "hand.tap")
                     }
@@ -822,17 +924,17 @@ struct DayEditorView: View {
 
                 Section("插入贴图") {
                     Button {
-                        isPhotoPickerRequested = true
+                        photoRoute = .importNew
                     } label: {
                         Label("从相册选择", systemImage: "photo.on.rectangle.angled")
                     }
                     Button {
-                        isCameraPresented = true
+                        present(.camera, model: model)
                     } label: {
                         Label("拍照即贴图", systemImage: "camera")
                     }
                     Button {
-                        isFileImporterPresented = true
+                        present(.fileImporter, model: model)
                     } label: {
                         Label("从文件导入", systemImage: "folder")
                     }
@@ -869,12 +971,12 @@ struct DayEditorView: View {
                 }
                 Section("本页") {
                     Button(role: .destructive) {
-                        isClearConfirmPresented = true
+                        dialogRoute = .clearPageConfirm
                     } label: {
                         Label("清空当前页", systemImage: "eraser.line.dashed")
                     }
                     Button(role: .destructive) {
-                        isDeletePageConfirmPresented = true
+                        dialogRoute = .deletePageConfirm
                     } label: {
                         Label("删除当前页", systemImage: "trash.slash")
                     }

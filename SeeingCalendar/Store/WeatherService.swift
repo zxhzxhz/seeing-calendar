@@ -79,11 +79,38 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
     /// 天气缓存字典：`[dateKey_locationKey: WeatherInfo]`
     private var weatherCache: [String: WeatherInfo] = [:]
 
-    /// 搜索地点建议列表
-    private(set) var searchResults: [WeatherLocation] = []
-    private(set) var isSearching = false
-    private(set) var isFetching = false
-    private(set) var lastError: String?
+    // MARK: - 相位（单一真值）
+
+    /// 天气请求相位。**单一真值**：`isFetching` / `lastError` 都是它的只读投影。
+    ///
+    /// 旧实现用 `isFetching = true` + `defer { isFetching = false }` 包住 `await`，
+    /// 两次请求重叠时先返回的那次会把标志提前熄火；改成相位 + 代次后，
+    /// 「迟到响应」在类型层面就没有改变相位的能力（见 `WeatherStatePolicy.reduce`）。
+    private(set) var weatherPhase: WeatherPhase = .idle
+
+    /// 城市搜索相位（带代次，乱序响应据此丢弃）。
+    private(set) var searchPhase: CitySearchPhase = .idle
+
+    /// 当前活跃拉取代次。响应携带的代次早于它即被丢弃。
+    private var weatherGeneration = 0
+    private var searchGeneration = 0
+
+    /// 兼容只读入口：界面用它显示「正在拉取最新天气…」与禁用刷新按钮。
+    /// 语义严格等于旧实现的 `isFetching`（只由 `fetchWeather` 置位）—— 不含定位态。
+    var isFetching: Bool { weatherPhase.isFetching }
+
+    /// 兼容只读入口：是否正在搜索。
+    ///
+    /// ★ 这一条是**真实编译**抓出来的：M4 首次落地时漏了它，swift-frontend -parse 只看语法所以放行，
+    /// 直到 macOS 客机 xcodebuild 才报 value of type 'WeatherService' has no dynamic member 'isSearching'。
+    /// 门禁已同步补上正向断言（见 verify_weather_state 的断言 0）。
+    var isSearching: Bool { searchPhase.isSearching }
+
+    /// 兼容只读入口：搜索建议列表。
+    var searchResults: [WeatherLocation] { searchPhase.items }
+
+    /// 兼容只读入口：最近一次**被采纳**的失败信息。
+    var lastError: String? { weatherPhase.failureMessage ?? searchPhase.failureMessage }
 
     private let locationManager = CLLocationManager()
     private let cacheURL: URL
@@ -113,16 +140,30 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
     // MARK: - 查询与装载
 
-    /// 获取指定日期的天气数据（若缓存命中直接返回，否则后台异步拉取）
+    /// **纯查询**：读取指定日期的缓存天气，绝不产生任何副作用。
+    ///
+    /// 渲染路径（`body` / 计算属性）只允许走这一个入口。
+    ///
+    /// 旧实现会在这里 `Task { await fetchWeather(for: date) }` —— 于是一次 SwiftUI
+    /// 求值就触发一次网络请求，**状态机的时钟变成了渲染回合**：读操作会写，
+    /// 而「读不产生副作用」正是本项目对 `@Observable` 分层的基本约定。
+    /// 两处调用点（`DayEditorView` 的 `.task` 与 `WeatherLocationSheet` 的 `.task`）
+    /// 本来就各自显式调了 `fetchWeather`，所以去掉这里的副作用不改变任何可见行为。
+    ///
+    /// 需要发起请求请显式调用 `requestWeather(for:)`。
     func weather(for date: Date) -> WeatherInfo? {
-        let key = cacheKey(for: date, location: currentLocation)
-        if let cached = weatherCache[key] {
-            return cached
-        }
-        Task {
-            await fetchWeather(for: date)
-        }
-        return nil
+        cachedWeather(for: date)
+    }
+
+    /// 缓存读取（无副作用，纯字典查找）。
+    func cachedWeather(for date: Date) -> WeatherInfo? {
+        weatherCache[cacheKey(for: date, location: currentLocation)]
+    }
+
+    /// 显式请求指定日期的天气（缓存新鲜则内部直接返回）。
+    @discardableResult
+    func requestWeather(for date: Date) -> Task<Void, Never> {
+        Task { await fetchWeather(for: date) }
     }
 
     /// 格式化包含天气的页面标题：`{日期} 天气{描述} 气温{min}~{max}摄氏度`
@@ -134,31 +175,40 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
         return baseDateTitle
     }
 
-    /// 拉取指定日期的天气
+    /// 拉取指定日期的天气。
+    ///
+    /// 所有相位写入都经 `WeatherStatePolicy.reduce`，且携带本次请求的代次：
+    /// **只有代次不早于当前活跃代次的响应才能改变相位**。
     func fetchWeather(for date: Date) async {
         let dateKey = CalendarUtils.key(for: date)
         let key = cacheKey(for: date, location: currentLocation)
-        
-        // 如果 2 小时内已拉取过，不重复请求
-        if let existing = weatherCache[key], Date().timeIntervalSince(existing.updatedAt) < 7200 {
+
+        // 缓存仍然新鲜：不重复请求，也完全不动相位。
+        if let existing = weatherCache[key],
+           WeatherStatePolicy.isCacheFresh(updatedAt: existing.updatedAt, now: Date()) {
             return
         }
 
-        isFetching = true
-        defer { isFetching = false }
+        weatherGeneration &+= 1
+        let generation = weatherGeneration
+        emit(.fetchBegan(generation: generation))
 
         let lat = currentLocation.latitude
         let lon = currentLocation.longitude
         let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&start_date=\(dateKey)&end_date=\(dateKey)"
         
-        guard let url = URL(string: urlString) else { return }
+        guard let url = URL(string: urlString) else {
+            // 必须收尾：否则相位永久停在 .fetching，isFetching 再也回不到 false。
+            emit(.failed(message: "天气请求地址无效", generation: generation))
+            return
+        }
 
         do {
             var request = URLRequest(url: url)
             request.timeoutInterval = 12
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                lastError = "天气接口响应异常 (\(http.statusCode))"
+                emit(.failed(message: "天气接口响应异常 (\(http.statusCode))", generation: generation))
                 return
             }
 
@@ -177,6 +227,7 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
                   let code = daily.weather_code?.first,
                   let maxTemp = daily.temperature_2m_max?.first,
                   let minTemp = daily.temperature_2m_min?.first else {
+                emit(.failed(message: "天气数据格式无法识别", generation: generation))
                 return
             }
 
@@ -191,9 +242,20 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
 
             weatherCache[key] = info
             persistCache()
+            emit(.succeeded(updatedAt: info.updatedAt, generation: generation))
         } catch {
-            lastError = error.localizedDescription
+            emit(.failed(message: error.localizedDescription, generation: generation))
         }
+    }
+
+    /// 唯一的天气相位写入点。
+    ///
+    /// 事件自带的代次早于 `weatherGeneration` 时，`reduce` 会原样返回旧相位 ——
+    /// 不写、不清、不改 `isFetching`。这就是「先返回者提前熄火」的修法。
+    private func emit(_ event: WeatherEvent) {
+        weatherPhase = WeatherStatePolicy.reduce(weatherPhase,
+                                                 event: event,
+                                                 latestGeneration: weatherGeneration)
     }
 
     // MARK: - 搜索城市
@@ -201,7 +263,9 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
     func searchCities(query: String) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            searchResults = []
+            // 清空输入 = 作废在途搜索：代次先推进，迟到响应就再也无法把建议列表写回来。
+            searchGeneration &+= 1
+            emitSearch(.cleared)
             return
         }
 
@@ -210,8 +274,9 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
             return
         }
 
-        isSearching = true
-        defer { isSearching = false }
+        searchGeneration &+= 1
+        let generation = searchGeneration
+        emitSearch(.began(query: trimmed, generation: generation))
 
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -228,27 +293,44 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
             }
             let res = try JSONDecoder().decode(GeocodingResponse.self, from: data)
             let items = res.results ?? []
-            self.searchResults = items.map {
+            let mapped = items.map {
                 WeatherLocation(name: $0.name, latitude: $0.latitude, longitude: $0.longitude, admin1: $0.admin1, country: $0.country)
             }
+            emitSearch(.succeeded(query: trimmed, generation: generation, items: mapped))
         } catch {
-            searchResults = []
+            emitSearch(.failed(query: trimmed, generation: generation, message: error.localizedDescription))
         }
+    }
+
+    /// 唯一的搜索相位写入点（与 `emit` 共用同一条代次采纳规则）。
+    ///
+    /// 快速连续输入会并发发出多次搜索：旧实现里任何一次返回都会覆盖
+    /// `searchResults`，于是结果与输入框内容对不上。带代次后，只有最后一次
+    /// `.began` 之后发出的那次响应能落地。
+    private func emitSearch(_ event: CitySearchEvent) {
+        searchPhase = CitySearchPolicy.reduce(searchPhase,
+                                              event: event,
+                                              latestGeneration: searchGeneration)
     }
 
     func selectLocation(_ location: WeatherLocation) {
         useAutoLocation = false
         currentLocation = location
-        searchResults = []
+        searchGeneration &+= 1
+        emitSearch(.cleared)
     }
 
     // MARK: - CoreLocation 自动定位
 
     func requestLocation() {
         let status = locationManager.authorizationStatus
+        // 只在**确实会发起定位**时才进入定位相位：
+        // `.denied` / `.restricted` 不会再有任何回调，进去就永久粘住。
         if status == .notDetermined {
+            emit(.locateBegan)
             locationManager.requestWhenInUseAuthorization()
         } else if status == .authorizedWhenInUse || status == .authorizedAlways {
+            emit(.locateBegan)
             locationManager.requestLocation()
         }
     }
@@ -274,13 +356,15 @@ final class WeatherService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         let msg = error.localizedDescription
         Task { @MainActor in
-            self.lastError = "定位失败：\(msg)"
+            self.emit(.locateEnded)
+            self.emit(.failed(message: "定位失败：\(msg)", generation: self.weatherGeneration))
         }
     }
 
     private func resolveLocationName(latitude lat: Double, longitude lon: Double) async {
         let loc = CLLocation(latitude: lat, longitude: lon)
         let geocoder = CLGeocoder()
+        defer { emit(.locateEnded) }   // 无论成败都收尾定位相位，绝不粘住 isBusy
         guard let placemarks = try? await geocoder.reverseGeocodeLocation(loc),
               let mark = placemarks.first else {
             currentLocation = WeatherLocation(name: "当前位置", latitude: lat, longitude: lon, admin1: nil, country: nil)

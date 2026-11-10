@@ -126,7 +126,7 @@ zip -qry SeeingCalendar-unsigned.ipa Payload
 ```bash
 # ---------- 回 Windows 取件 ----------
 scp -P 50922 admin@127.0.0.1:~/seeingcalendar/SeeingCalendar-unsigned.ipa \
-  /mnt/i/APP/看见Calendar_dev/artifacts/local-v1.0.36/
+  /mnt/i/APP/看见Calendar_dev/artifacts/local-v1.0.37/
 ```
 
 **通用三步**（换成任何一台装了 Xcode 的 Mac，只要先把 `xcodegen` 装上）：
@@ -177,7 +177,7 @@ ssh -p 50922 admin@127.0.0.1 'bash -s' < tools/cal-install-xcodegen.sh
 ## 8. 产物
 
 ```
-artifacts/local-v1.0.36/
+artifacts/local-v1.0.37/
 ├── SeeingCalendar-unsigned.ipa     # 未签名，交给 AltStore / SideStore / Sideloadly 重签
 ├── SeeingCalendar-dSYMs.zip
 ├── SeeingCalendar-build.log

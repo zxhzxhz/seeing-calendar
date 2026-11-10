@@ -255,9 +255,12 @@ struct SubscriptionsView: View {
     }
 
     private func scopeLabel(for subscription: ICSSubscription) -> String {
-        guard !subscription.workspaceUUIDs.isEmpty else { return "全局" }
+        // 哨兵判定走类型化视图：非「全局」时才列维度。
+        guard case .scoped = subscription.scope else { return "全局" }
         // 磁盘上的旧数据可能引用已经不存在的维度（例如从旧备份恢复、而备份里缺那块画板），
         // 所以这里保留「已删除维度」兜底，而不是直接干掉那一项。
+        // 读原数组而非 `scope.persisted`：展示顺序要跟随用户的勾选顺序，
+        // 而 `scope` 由 `Set` 支撑、不保序。
         return subscription.workspaceUUIDs
             .map { uuid in workspaces.first { $0.uuid == uuid }?.name ?? "已删除维度" }
             .joined(separator: "、")
@@ -302,7 +305,7 @@ struct SubscriptionsView: View {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         guard !trimmedURL.isEmpty else { return }
-        let scopeChanged = Set(subscription.workspaceUUIDs) != Set(scope)
+        let scopeChanged = subscription.scope != SubscriptionScopeValue(persisted: scope)
         let urlChanged = subscription.urlString != trimmedURL
         subscription.name = trimmed
         subscription.urlString = trimmedURL
@@ -379,6 +382,7 @@ private struct SubscriptionEditorSheet: View {
         self.onSave = onSave
         _name = State(initialValue: subscription.name)
         _urlString = State(initialValue: subscription.urlString)
+        // 读原数组而非 `scope.persisted`：编辑器里的初始顺序要跟随勾选顺序。
         _scope = State(initialValue: subscription.workspaceUUIDs)
     }
 

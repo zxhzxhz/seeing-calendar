@@ -65,6 +65,39 @@ jobs:
       - name: Verify undo history (复活不可能 + 检查器有牙 + PencilKit 单一引擎)
         run: swift scripts/verify_undo_history.swift --strict   # 被撤销的笔画又回来 / 检查器退化成恒真即让构建失败
 
+      - name: Verify weather phase machine (迟到响应不得熄火 + 渲染路径无副作用)
+        run: swift scripts/verify_weather_state.swift --strict   # 加载态提前熄火 / getter 触发网络即让构建失败
+
+      - name: Verify refresh phase machine (并发合并 + 冷却窗口是状态 + 代次纪律)
+        run: swift scripts/verify_refresh_state.swift --strict   # 先返回者提前熄火 / 迟到结果覆盖新结果即让构建失败
+
+      - name: Verify pager phase machine (落位期屏蔽手势 + 阻尼/方向逐位等价)
+        run: swift scripts/verify_pager_phase.swift --strict   # 落位动画被新手势打断即让构建失败
+
+      - name: Verify canvas gesture phases (下拉返回握手 + 菜单退场冷却)
+        run: swift scripts/verify_canvas_gesture.swift --strict   # 返回手势误触发 / 菜单退场吞掉正常点击即让构建失败
+
+      - name: Verify editor session phases (自动保存身份校验 + 二次编辑前值收敛)
+        run: swift scripts/verify_editor_session.swift --strict   # 换页后重复写盘 / 编辑态镜像漂移即让构建失败
+
+      - name: Verify selection phase + interaction phase (单一写者 + 手势暂存收紧)
+        run: swift scripts/verify_selection_state.swift --strict   # 选区真值出现第二个写者 / 错模式下取到垃圾几何即让构建失败
+
+      - name: Verify drag phase (基点式位移 + 死区重锚不跳变)
+        run: swift scripts/verify_drag_phase.swift --strict   # 增量累加漂移 / 死区一次性跳变即让构建失败
+
+      - name: Verify editor sheet routing (模态互斥 + 13 个布尔收敛)
+        run: swift scripts/verify_editor_sheet_routing.swift --strict   # 两个模态同真被静默丢弃即让构建失败
+
+      - name: Verify input mode machine (7 态互斥 + 触控路由 + 边缘双击记忆)
+        run: swift scripts/verify_input_mode.swift --strict   # 工具与套索成为可同时为真的野组合即让构建失败
+
+      - name: Verify backup phase machine (终态互斥 + 等待策略态唯一持有者)
+        run: swift scripts/verify_backup_phase.swift --strict   # 失败与成功摘要并存 / 弹窗状态漂移即让构建失败
+
+      - name: Verify page order + subscription scope invariants (封面判定 + 空数组哨兵类型化)
+        run: swift scripts/verify_page_and_scope_invariants.swift --strict   # 封面取到数组第一个（历史事故 #259）即让构建失败
+
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 

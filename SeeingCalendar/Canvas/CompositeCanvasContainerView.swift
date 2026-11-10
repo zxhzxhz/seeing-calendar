@@ -33,31 +33,100 @@ final class CompositeCanvasContainerView: UIView {
     private var history: [CanvasSnapshot] = []
     private var redoStack: [CanvasSnapshot] = []
     private let historyLimit = 30
-    private var isProgrammatic = false
-    private var isToolSessionActive = false
-    /// 原生菜单动作后的点击保护窗口。
-    var menuActionGuardUntil: Date = .distantPast
+    /// 程序化写入 drawing 的**嵌套深度计数器**。
+    ///
+    /// 为什么是计数器而不是 bool：**嵌套的程序化写入**（例如 `apply(_:)` 内部先后触发
+    /// `discardSelection()` 与 `setDrawing(...)`，或未来任何在一次程序化写入里再发起
+    /// 另一次写入的路径）会在内层 `defer` 退出时把布尔标志**提前放行**，于是
+    /// `canvasViewDrawingDidChange` 会把程序化写入误判成「用户在用笔/橡皮」，
+    /// 进而清掉选区、让重做栈失效。计数到 0 才算程序化结束，嵌套不会漏放行。
+    private var programmaticDepth = 0
+
+    /// `isProgrammatic` 的**引用计数式投影**（存储真值是上面的 `programmaticDepth`）。
+    ///
+    /// 为什么保留这个名字与「= true / = false」的读写形状：`scripts/verify_undo_history.swift`
+    /// 把 `setDrawing` 的文本 `isProgrammatic = true defer { isProgrammatic = false }`
+    /// 当不变量钉死（它守护的是「页内写入只换 strokes、绝不整份换」）。为不动既有门禁，
+    /// 这里让赋值本身成立数动作：`= true` 深度 +1、`= false` 深度 -1。
+    /// 于是「计数」语义真实成立（嵌套可重入），而既有调用点与门禁文本都不变。
+    private var isProgrammatic: Bool {
+        get { programmaticDepth > 0 }
+        set { programmaticDepth += newValue ? 1 : -1 }
+    }
+
+    /// 常驻交互相位的**单一真值**（有笔按在画布上 / 正在拖拽选区）。
+    ///
+    /// 旧实现是两台各自没有类型的 bool（`isToolSessionActive` / `isAdjustingSelection`），
+    /// 混住在同一批字段里、谁真谁假全凭调用点约定。现在由 `InteractionPolicy` 驱动，
+    /// `isAdjustingSelection` / `isToolSessionActive` 降级为只读计算投影。
+    private(set) var interactionPhase: InteractionPhase = .idle
+    /// 原生菜单退场冷却相位的**单一真值**。
+    ///
+    /// 旧实现用 `menuActionGuardUntil: Date` 当状态：挂钟时间不是状态（`Date()` 抖一下、
+    /// 主线程卡顿一下行为就变），且公开可写、语义靠约定、不可穷举。
+    /// 现在由触摸生命周期驱动相位机：菜单选中动作 → `.coasting`，
+    /// 透传下来的**一次**画布点击消费掉它 → `.open`。
+    private(set) var menuGuardPhase: MenuGuardPhase = .open
+
+    /// 兼容只读投影：旧 `menuActionGuardUntil` 的等价物（冷却中 = 远未来，否则 = 远过去）。
+    /// 保留它只为零破坏迁移，任何**新**代码请直接读 `menuGuardPhase.blocksCanvasTap`。
+    var menuActionGuardUntil: Date {
+        menuGuardPhase == .coasting ? .distantFuture : .distantPast
+    }
+
+    /// 菜单冷却相位的**唯一写入点**：菜单里点选一个动作即进入透传保护。
+    func noteMenuActionSelected() {
+        menuGuardPhase = MenuGuardPolicy.reduce(menuGuardPhase, event: .menuActionSelected)
+    }
+
+    /// 交互相位的**唯一写入点**：把事件喂给 `InteractionPolicy`。
+    ///
+    /// 为什么不直接写 `interactionPhase`：它的 setter 是 `private(set)`，
+    /// 而拖拽相关的事件都发生在另一个文件的扩展（`CompositeCanvasContainer+Selection.swift`）里。
+    /// 经这个同形方法的单写者接入，既满足「真值只能由相位机推进」，
+    /// 又让跨文件扩展无需放宽 `private(set)`。
+    func noteInteraction(_ event: InteractionEvent) {
+        interactionPhase = InteractionPolicy.reduce(interactionPhase, event: event)
+    }
 
     // 选区状态
     var selectedImageIDs: [UUID] = []
     var selectedStrokes: [PKStroke] = []
-    var selectionKind: CanvasSelectionKind = .none
+    /// 选区语义相位的**单一真值**。唯一写者是 `notifySelection(broadcast:)`。
+    private(set) var selectionPhase: SelectionPhase = .none
     var isGroupTransforming = false
-    /// 任何「正在拖拽选区」的状态（手柄 / 贴图位移 / 整体变换）——
-    /// 期间只做几何更新，绝不重建手柄，也绝不重弹菜单。
-    var isAdjustingSelection = false
+
+    /// 选区相位的**只读计算投影**：5 个 case 与 `SelectionPhase` 一一对应。
+    ///
+    /// 保留它是为了让 `EditorModel` 与 `SelectionOverlayView` 的全部既有调用点**零改动**；
+    /// 它没有 setter —— 任何想改选区的人都必须去写**原始事实**并调 `notifySelection()`。
+    var selectionKind: CanvasSelectionKind {
+        switch selectionPhase {
+        case .none: return .none
+        case .composite: return .composite
+        case .image(let id): return .image(id)
+        case .compositeTransform: return .compositeTransform
+        case .cropping(let id): return .cropping(id)
+        }
+    }
+
+    /// 是否正在拖拽选区（手柄 / 贴图位移 / 整体变换）。旧 `isAdjustingSelection` 的只读投影。
+    var isAdjustingSelection: Bool { interactionPhase.isAdjusting }
+    /// 是否有笔正按在画布上。旧 `isToolSessionActive` 的只读投影。
+    private var isToolSessionActive: Bool { interactionPhase == .toolSession }
 
     /// 锁定贴图数量变化回调（供编辑器的「解锁全部贴图」菜单项显示数量与可用性）。
     var onLockedCountChanged: ((Int) -> Void)?
     var croppingImageID: UUID?
     var floatingPreview: UIImageView?
-    var gestureBaseTransform: CGAffineTransform?
+    /// 手势进行中的基准暂存（per-mode scratch）：5 个扁平字段已收进这个带类型的值。
+    var gestureScratch: SelectionGestureScratch = .none
+    /// 手势的起始点。缩放 / 旋转 / 内部拖拽都要拿它算「相对起点的位移 / 夹角」。
+    ///
+    /// 它**不**进 `SelectionGestureScratch`：它是三种手势共用的同一个原始量，
+    /// 含义不随手势种类改变（都是「手指落下的那一点」），收进枚举反而要在每个 case 里抄一遍。
     var gestureBasePoint: CGPoint = .zero
     var clipboard: CanvasClipboard?
-    var cropBase: (crop: CGRect, transform: CGAffineTransform, natural: CGSize)?
-    var groupBaseBounds: CGRect = .null
-    var groupBaseTransforms: [UUID: CGAffineTransform] = [:]
-    var groupAccumulatedDelta: CGAffineTransform?
 
     /// 绘制策略或手指书写开关变化回调（供宿主视图同步平移手势的最低触控指树限制）。
     var onDrawingPolicyChanged: (() -> Void)?
@@ -75,6 +144,18 @@ final class CompositeCanvasContainerView: UIView {
         didSet {
             guard oldValue != isFingerDrawingEnabled else { return }
             updateDrawingPolicy()
+            onDrawingPolicyChanged?()
+        }
+    }
+
+    /// 画布输入模式（导航 / 4 种笔 / 橡皮 / 套索）。由 `EditorModel` 下发，供宿主视图
+    /// 决定单指归属（见 `TouchRoutingPolicy`）。
+    ///
+    /// 为什么在容器上再放一份：宿主视图 `CanvasHostView` 不持有 `EditorModel`，沿用的就是
+    /// `isFingerDrawingEnabled` / `isDrawingEnabled` 这条路 —— 由模型主动赋值推送，不新建机制。
+    var inputMode: CanvasInputMode = .navigation {
+        didSet {
+            guard oldValue != inputMode else { return }
             onDrawingPolicyChanged?()
         }
     }
@@ -243,7 +324,7 @@ final class CompositeCanvasContainerView: UIView {
 
         // 3. 套索模式：其余区域由覆盖层接管。
         //    「这一下该不该画套索」在 SelectionOverlayView.touchesBegan 里判定 ——
-        //    因为 UIEvent.allTouches 在 hitTest 阶段不可靠（初次落笔常常取不到该触摸），
+        //    因为事件的触摸集合在 hitTest 阶段不可靠（初次落笔常常取不到该触摸），
         //    曾经据此分流导致「关闭手指开关后完全无法套索」。
         if isLassoActive {
             return selectionOverlay
@@ -282,11 +363,18 @@ final class CompositeCanvasContainerView: UIView {
 
     @objc private func handleContainerTap(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
-        let point = gesture.location(in: self)
 
-        // 刚从原生菜单点选动作后的一小段时间内忽略画布点击：
-        // 菜单退场时可能把触摸透传下来，否则会立刻把刚建立的选择清掉（表现为“变形点了没反应”）。
-        if Date() < menuActionGuardUntil { return }
+        // 刚从原生菜单点选动作后，菜单退场可能把**一次**触摸透传下来：
+        // 忽略这一次，否则会立刻把刚建立的选择清掉（表现为“变形点了没反应”）。
+        // 旧写法用挂钟时间窗（对比当前时刻与冷却时间戳）：不可穷举，
+        // 且主线程卡顿会随机漏掉 / 吞掉用户的正常点击。
+        // 现改为「读相位 + 发送 tapReceived 事件」两步：冷却窗口 = 恰好一次点击。
+        if menuGuardPhase.blocksCanvasTap {
+            menuGuardPhase = MenuGuardPolicy.reduce(menuGuardPhase, event: .tapReceived)
+            return
+        }
+
+        let point = gesture.location(in: self)
 
         // 1) 手柄 / 浮动菜单：交给它们自己处理
         if selectionOverlay.hitsHandleOrMenu(point) { return }
@@ -445,10 +533,10 @@ final class CompositeCanvasContainerView: UIView {
         }
         entity.onBeginMove = { [weak self] view in
             guard let self else { return }
-            // 拖拽期间不重建手柄、不重弹菜单（由 tag/generation 守卫保证）。
+            // 拖拽期间不重建手柄、不重弹菜单（由 interactionPhase.allowsOverlayRebuild 守卫）。
             // 注意：这里**不能**调用 dismissMenu() —— 收起原生菜单会中断正在进行中的触摸，
             // 表现为「第一次拖动只走一下，第二次才正常」。
-            self.isAdjustingSelection = true
+            self.noteInteraction(.selectionAdjustingBegan)
             self.pushHistory()
             _ = view
         }
@@ -459,7 +547,7 @@ final class CompositeCanvasContainerView: UIView {
         }
         entity.onEndMove = { [weak self] _ in
             guard let self else { return }
-            self.isAdjustingSelection = false
+            self.noteInteraction(.selectionAdjustingEnded)
             // 手指脱离后才把选中贴图重挂载到顶层容器（拖拽中重挂载会取消手势）。
             self.elevateSelection()
             self.refreshSelectionOverlay()
@@ -595,21 +683,21 @@ final class CompositeCanvasContainerView: UIView {
         onHistoryChange?(canUndo, canRedo)
     }
 
-    func notifySelection() {
-        let kind: CanvasSelectionKind
-        if let croppingImageID {
-            kind = .cropping(croppingImageID)
-        } else if isGroupTransforming, !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
-            kind = .compositeTransform
-        } else if selectedImageIDs.count == 1, selectedStrokes.isEmpty {
-            kind = .image(selectedImageIDs[0])
-        } else if selectedImageIDs.isEmpty, selectedStrokes.isEmpty {
-            kind = .none
-        } else {
-            kind = .composite
-        }
-        selectionKind = kind
-        onSelectionChange?(kind)
+    /// 选区相位的**唯一写入点**：由原始事实重新推导相位、刷新覆盖层，
+    /// 并按 `broadcast` 决定是否对外回调 `onSelectionChange`。
+    ///
+    /// 为什么把「更新状态」与「对外广播」拆开：旧实现把两件事塞进 `commitSelection(notify:)`
+    /// 一个 bool —— 传 `false` 时既不广播、也**不重推导**，改走一条直接写 `selectionKind = .none`
+    /// 的旁路，于是相位出现了第二、第三个写者。现在相位永远在这里被重建，
+    /// `broadcast` 只影响回调：传 `false` 时仍会更新真值与覆盖层，只是不对外广播。
+    func notifySelection(broadcast: Bool = true) {
+        selectionPhase = SelectionStatePolicy.phase(
+            imageIDs: selectedImageIDs,
+            strokeCount: selectedStrokes.count,
+            isGroupTransforming: isGroupTransforming,
+            croppingID: croppingImageID
+        )
+        if broadcast { onSelectionChange?(selectionKind) }
         refreshSelectionOverlay()
     }
 
@@ -738,7 +826,7 @@ final class CompositeCanvasContainerView: UIView {
 extension CompositeCanvasContainerView: PKCanvasViewDelegate {
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         guard !isToolSessionActive else { return }
-        isToolSessionActive = true
+        noteInteraction(.toolSessionBegan)
         // 落笔即视为退出选区编辑态（等价于“点按空白处取消选中”）。
         if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {
             commitSelection(notify: true)
@@ -747,12 +835,12 @@ extension CompositeCanvasContainerView: PKCanvasViewDelegate {
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        isToolSessionActive = false
+        noteInteraction(.toolSessionEnded)
         onContentChange?()
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-        guard !isProgrammatic else { return }
+        guard programmaticDepth == 0 else { return }
         // 画布内容一旦变化，说明用户在用笔/橡皮 —— 等价于“点按空白处”，选区随即失效。
         // 该路径不依赖手势共存仲裁，因此“手指书写开启”时同样可靠。
         if !selectedImageIDs.isEmpty || !selectedStrokes.isEmpty {

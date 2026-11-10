@@ -32,7 +32,7 @@ enum BackupEntry {
     }
 }
 
-struct BackupManifest: Codable, Sendable {
+struct BackupManifest: Codable, Equatable, Sendable {
     var schemaVersion: Int
     var appVersion: String
     var exportDate: Date
@@ -46,7 +46,7 @@ struct BackupManifest: Codable, Sendable {
     var databaseDigest: String
 }
 
-struct BackupDatabase: Codable, Sendable {
+struct BackupDatabase: Codable, Equatable, Sendable {
     var workspaces: [WorkspaceDTO] = []
     var days: [DayDTO] = []
     var pages: [PageDTO] = []
@@ -54,14 +54,14 @@ struct BackupDatabase: Codable, Sendable {
     var subscriptions: [SubscriptionDTO] = []
 }
 
-struct WorkspaceDTO: Codable, Sendable {
+struct WorkspaceDTO: Codable, Equatable, Sendable {
     var uuid: UUID
     var name: String
     var sortIndex: Int
     var createdAt: Date
 }
 
-struct DayDTO: Codable, Sendable {
+struct DayDTO: Codable, Equatable, Sendable {
     var workspaceUUID: UUID
     var dateKey: String
     var note: String
@@ -69,7 +69,7 @@ struct DayDTO: Codable, Sendable {
     var pageUUIDs: [UUID] = []
 }
 
-struct PageDTO: Codable, Sendable {
+struct PageDTO: Codable, Equatable, Sendable {
     var uuid: UUID
     var index: Int
     var drawingFile: String
@@ -77,7 +77,7 @@ struct PageDTO: Codable, Sendable {
     var imageUUIDs: [UUID] = []
 }
 
-struct ImageDTO: Codable, Sendable {
+struct ImageDTO: Codable, Equatable, Sendable {
     var uuid: UUID
     var fileName: String
     var a: Double
@@ -95,7 +95,7 @@ struct ImageDTO: Codable, Sendable {
     var zIndex: Int
 }
 
-struct SubscriptionDTO: Codable, Sendable {
+struct SubscriptionDTO: Codable, Equatable, Sendable {
     var uuid: UUID
     var name: String
     var urlString: String
@@ -122,7 +122,7 @@ struct BackupRequest: Sendable {
     var assetFiles: [String: URL]
 }
 
-struct RestoreBundle: Sendable {
+struct RestoreBundle: Equatable, Sendable {
     var manifest: BackupManifest?
     var database: BackupDatabase
     /// `database_dump.json` 原始字节，用于与清单指纹比对。
@@ -154,7 +154,7 @@ enum RestoreMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-struct RestoreSummary: Sendable {
+struct RestoreSummary: Equatable, Sendable {
     var mode: RestoreMode = .smartMerge
     var workspaces = 0
     var days = 0

@@ -59,44 +59,61 @@ actor BackupService {
 @MainActor
 @Observable
 final class BackupCoordinator {
-    private(set) var isWorking = false
-    private(set) var progress: Double = 0
-    private(set) var statusText = ""
-    private(set) var lastError: String?
-    private(set) var lastSummary: RestoreSummary?
-    private(set) var pendingRestore: RestoreBundle?
+    /// 备份 / 恢复生命周期的**唯一真值**。
+    ///
+    /// 旧的 5 个存储字段（`isWorking` / `progress` / `statusText` / `lastError` /
+    /// `lastSummary` / `pendingRestore`）全部降级为它的只读投影，
+    /// 于是「同一事实有多个持有者」从根上不可表达（见 `BackupPhasePolicy.swift` 的说明）。
+    private(set) var phase: BackupPhase = .idle
+
+    // MARK: - 只读投影（签名与类型和旧存储字段完全一致，既有调用点零改动）
+
+    /// 是否忙碌。严格等价于旧的 `isWorking`（只有导出 / 校验 / 恢复为真）。
+    var isWorking: Bool { phase.isWorking }
+    /// 进度 0…1；非进度相位恒为 0（消除旧实现的进度残值）。
+    var progress: Double { phase.progress }
+    /// 状态文案。
+    var statusText: String { phase.statusText }
+    /// 失败信息（含完整性告警）。与 `lastSummary` 互斥 —— 不会同时非 nil。
+    var lastError: String? { phase.failureMessage ?? phase.warningMessage }
+    /// 成功摘要（只有 `.finished` 才非空）。
+    var lastSummary: RestoreSummary? { phase.summary }
+    /// 待恢复内容（唯一真值来自 `phase`）。
+    var pendingRestore: RestoreBundle? { phase.pendingRestore }
+    /// 是否正在等待用户选择恢复策略（`RootView` 的弹窗唯一读它）。
+    var isAwaitingStrategy: Bool { phase.isAwaitingStrategy }
 
     private let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+
+    /// **唯一的相位写入点** —— 所有状态变化都必须经过 `BackupPolicy.reduce`。
+    private func emit(_ event: BackupEvent) {
+        phase = BackupPolicy.reduce(phase, event: event)
+    }
 
     // MARK: - 导出
 
     func exportArchive(context: ModelContext, reason: SnapshotReason = .manual) async -> URL? {
-        guard !isWorking else { return nil }
-        isWorking = true
-        progress = 0
-        statusText = "正在整理数据…"
-        lastError = nil
-        defer { isWorking = false }
+        guard BackupPolicy.acceptsNewRequest(phase) else { return nil }
+        emit(.exportBegan)
 
         let request = makeRequest(context: context, reason: reason)
         if request.database.pages.isEmpty && request.database.days.isEmpty && reason == .manual {
-            lastError = "当前没有任何画作内容，无需备份。"
+            emit(.failed(message: "当前没有任何画作内容，无需备份。"))
             return nil
         }
 
-        statusText = "正在打包 .vcal 归档…"
         do {
             let output = try await BackupService.shared.writeArchive(request: request) { value in
                 Task { @MainActor in
-                    self.progress = value
+                    self.emit(.exportProgressed(value))
                 }
             }
-            progress = 1
-            statusText = "备份完成（\(formattedSize(output.byteCount))）"
+            // 导出没有 `RestoreSummary` 语义，用空摘要占位；`statusText` 走 message 字段。
+            emit(.exportSucceeded(message: "备份完成（\(formattedSize(output.byteCount))）",
+                                  summary: RestoreSummary()))
             return output.url
         } catch {
-            lastError = error.localizedDescription
-            statusText = "备份失败"
+            emit(.failed(message: error.localizedDescription))
             return nil
         }
     }
@@ -203,11 +220,8 @@ final class BackupCoordinator {
     // MARK: - 恢复
 
     func prepareRestore(at url: URL) async -> Bool {
-        guard !isWorking else { return false }
-        isWorking = true
-        statusText = "正在校验归档…"
-        lastError = nil
-        defer { isWorking = false }
+        guard BackupPolicy.acceptsNewRequest(phase) else { return false }
+        emit(.importBegan)
 
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -217,40 +231,47 @@ final class BackupCoordinator {
         do {
             try FileManager.default.copyItem(at: url, to: localCopy)
         } catch {
-            lastError = "无法读取所选文件：\(error.localizedDescription)"
+            emit(.failed(message: "无法读取所选文件：\(error.localizedDescription)"))
             return false
         }
 
         do {
             let bundle = try await RestoreService.extract(archiveAt: localCopy)
+            var warning: String?
             if let manifest = bundle.manifest, manifest.databaseDigest.isEmpty == false {
                 let digest = SHA256.hash(data: bundle.databaseData).map { String(format: "%02x", $0) }.joined()
                 if digest != manifest.databaseDigest {
                     // 指纹不一致仍允许导入，但必须明确告警，不静默丢弃用户资产。
-                    lastError = "归档指纹与清单不一致，内容可能被外部修改过。"
+                    // 告警作为**待恢复相位的载荷**存在：它允许与「等待用户选择策略」共存，
+                    // 但绝不与失败 / 成功终态混为一谈。
+                    warning = "归档指纹与清单不一致，内容可能被外部修改过。"
                 }
             }
-            pendingRestore = bundle
-            statusText = "归档校验通过"
+            emit(.importParsed(bundle, .smartMerge, warning: warning))
             return true
         } catch {
-            lastError = error.localizedDescription
-            statusText = "归档解析失败"
+            emit(.failed(message: error.localizedDescription))
             return false
         }
     }
 
     func applyPendingRestore(mode: RestoreMode, context: ModelContext) -> RestoreSummary? {
-        guard let bundle = pendingRestore else { return nil }
+        guard let bundle = phase.pendingRestore else { return nil }
+        emit(.strategyChosen(mode))
+        emit(.restoreBegan)
         let summary = RestoreApplier.apply(bundle: bundle, mode: mode, context: context)
-        pendingRestore = nil
-        lastSummary = summary
-        statusText = summary.message
+        emit(.restoreSucceeded(message: summary.message, summary: summary))
         return summary
     }
 
+    /// 放弃待恢复内容（弹窗取消 / 「取消导入」）。
+    ///
+    /// 只在「等待用户选择策略」时生效：其它相位的终止由下一次请求自然覆盖，
+    /// 这样可以避免弹窗自动收起（系统会置 `isPresented = false`）时误清掉刚落地
+    /// 的成功态。
     func clearPendingRestore() {
-        pendingRestore = nil
+        guard phase.isAwaitingStrategy else { return }
+        emit(.dismissed)
     }
 
     // MARK: - 工具

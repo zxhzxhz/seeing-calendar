@@ -25,6 +25,7 @@ struct ToolSettingsStore {
         static let edgeDoubleTapSettings = "editorTool.edgeDoubleTapSettings"
         static let lastSelectedTool = "editorTool.lastSelectedTool"
         static let isLassoActive = "editorTool.isLassoActive"
+        static let inputMode = "editorTool.inputMode"
         static let paperStyle = "editorTool.paperStyle"
 
         static func penColor(_ tool: CanvasTool) -> String {
@@ -149,23 +150,30 @@ struct ToolSettingsStore {
     }
 
     // MARK: - 工具/笔记忆
+    //
+    // M1 之后，画布输入模式的唯一持久化归宿是下面的 `inputMode` 单键。
+    // `lastSelectedTool` / `lastIsLassoActive` 两个旧键**只保留读取路径**（不再写入），
+    // 仅用于 `EditorModel.restoreToolSettings()` 做**一次性迁移**：新键缺失时用它们合成模式，
+    // 然后写回新键。旧键不删除，是为了回滚到旧版本时仍能读到值而不崩。
     var lastSelectedTool: CanvasTool? {
-        get {
-            guard let raw = defaults.string(forKey: Key.lastSelectedTool) else { return nil }
-            return CanvasTool(rawValue: raw)
-        }
-        nonmutating set {
-            if let newValue {
-                defaults.set(newValue.rawValue, forKey: Key.lastSelectedTool)
-            } else {
-                defaults.removeObject(forKey: Key.lastSelectedTool)
-            }
-        }
+        guard let raw = defaults.string(forKey: Key.lastSelectedTool) else { return nil }
+        return CanvasTool(rawValue: raw)
     }
 
     var lastIsLassoActive: Bool {
-        get { defaults.bool(forKey: Key.isLassoActive) }
-        nonmutating set { defaults.set(newValue, forKey: Key.isLassoActive) }
+        defaults.bool(forKey: Key.isLassoActive)
+    }
+
+    /// 画布输入模式（7 态互斥）。`nil` = 从未写过（触发旧键一次性迁移）。
+    var inputMode: CanvasInputMode? {
+        get { CanvasInputMode.fromStorageToken(defaults.string(forKey: Key.inputMode)) }
+        nonmutating set {
+            if let newValue {
+                defaults.set(newValue.storageToken, forKey: Key.inputMode)
+            } else {
+                defaults.removeObject(forKey: Key.inputMode)
+            }
+        }
     }
 
     // MARK: - 工具

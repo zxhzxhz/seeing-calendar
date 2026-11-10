@@ -99,8 +99,11 @@ struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
 /// 表现是「设置页写着 2 个维度，月历上却在别的维度也显示」，最难查的一种 bug。
 enum SubscriptionScope {
     /// 空作用域 = 全局，任何维度都命中。
+    ///
+    /// **委派给 `SubscriptionScopeValue`**：哨兵的解读只在 `init(persisted:)` 一处，
+    /// 本函数只是保留给既有调用点的 `[UUID]` 适配层（签名不能变，门禁与大量调用点都钉着它）。
     static func applies(_ scope: [UUID], to workspaceUUID: UUID) -> Bool {
-        scope.isEmpty || scope.contains(workspaceUUID)
+        SubscriptionScopeValue(persisted: scope).applies(to: workspaceUUID)
     }
 
     /// 摘要：**空 = 全局，非空只报数量**。

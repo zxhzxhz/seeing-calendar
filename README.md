@@ -4,7 +4,7 @@
 以 **无模板自由手绘** 为核心创作方式，以 **1:1 正方形网格缩略图联动** 为视觉载体，
 实现「画即所得 · 日记即日程 · 月历即画廊」的闭环。
 
-> **当前版本 `v1.0.36`** · iPad only（`UIDeviceFamily = [2]`）· Swift 6 严格并发 · 最低 iOS 18.0
+> **当前版本 `v1.0.37`** · iPad only（`UIDeviceFamily = [2]`）· Swift 6 严格并发 · 最低 iOS 18.0
 > 构建走**本机 macOS 虚拟机**，交付物为未签名 `.ipa`（自行签名安装）。
 > 工程严格按 `visual_calendar_product_tech_spec.md`（v2.2）落地，并由 `scripts/verify_*.swift` 的 10 项门禁守住既有行为约定。
 
@@ -52,7 +52,7 @@ SeeingCalendar/
 └── Resources/           # 资产目录 + 随包发行的中国节假日 ICS
 ```
 
-## 3. 功能总览（v1.0.36）
+## 3. 功能总览（v1.0.37）
 
 ### 3.1 月历与导航
 

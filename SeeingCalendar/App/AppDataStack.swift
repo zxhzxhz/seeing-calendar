@@ -47,9 +47,13 @@ enum AppDataStack {
         let legacy = all.filter { $0.workspaceUUID != nil }
         guard !legacy.isEmpty else { return }
         for subscription in legacy {
+            // 合成规则集中到 `SubscriptionScopeValue.migrating`（哨兵解读的唯一地点）：
+            // legacy 非空 → 只选它；legacy 为空 → 沿用既有数组。
             // 上面的过滤保证 `workspaceUUID` 非空；真解包失败也只清掉旧字段，
             // 不猜作用域（宁可退回全局，也不要凭空断定某个维度）。
-            subscription.setScope(subscription.workspaceUUID.map { [$0] } ?? [])
+            let migrated = SubscriptionScopeValue.migrating(legacy: subscription.workspaceUUID,
+                                                            existing: subscription.workspaceUUIDs)
+            subscription.setScope(migrated.persisted)
         }
         try? context.save()
     }

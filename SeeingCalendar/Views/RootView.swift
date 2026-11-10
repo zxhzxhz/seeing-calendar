@@ -32,7 +32,6 @@ struct RootView: View {
     @State private var holidayRegistry = HolidayRegistry.shared
     @State private var showSubscriptions = false
     @State private var showBackup = false
-    @State private var showRestoreDialog = false
     /// 顶栏年月处的月份选择下拉面板是否展开。
     @State private var showMonthPicker = false
     @State private var toast: String?
@@ -115,7 +114,16 @@ struct RootView: View {
         .sheet(isPresented: $showBackup) {
             BackupView(coordinator: backup)
         }
-        .confirmationDialog("检测到 .vcal 归档，选择恢复策略", isPresented: $showRestoreDialog, titleVisibility: .visible) {
+        // 「是否在等待用户选择恢复策略」**不再**有第 6 个持有者：弹窗直接读
+        // `backup.isAwaitingStrategy`（由单一真值 `BackupPhase.awaitingStrategy` 派生）。
+        // set 为 false 时说明用户主动关闭（点外部 / 取消）——按旧 `clearPendingRestore()`
+        // 的行为放弃本次恢复；若此时已因「选了策略」而落到终态，`clearPendingRestore` 会自动放行。
+        .confirmationDialog("检测到 .vcal 归档，选择恢复策略",
+                            isPresented: Binding(get: { backup.isAwaitingStrategy },
+                                                 set: { presented in
+                                                     if !presented { backup.clearPendingRestore() }
+                                                 }),
+                            titleVisibility: .visible) {
             ForEach(RestoreMode.allCases) { mode in
                 Button(mode.title) { applyRestore(mode) }
             }
@@ -569,11 +577,11 @@ struct RootView: View {
     private func handleIncoming(url: URL) async {
         guard url.pathExtension.lowercased() == "vcal" else { return }
         let ready = await backup.prepareRestore(at: url)
-        if ready {
-            showRestoreDialog = true
-        } else if let error = backup.lastError {
+        if !ready, let error = backup.lastError {
             toast = error
         }
+        // 成功时不再手动开弹窗：`backup.isAwaitingStrategy` 已是唯一真值，
+        // `.confirmationDialog` 直接读它，那个被重复持有的弹窗存储已删除。
     }
 
     private func applyRestore(_ mode: RestoreMode) {

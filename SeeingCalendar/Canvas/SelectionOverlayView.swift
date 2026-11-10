@@ -30,13 +30,16 @@ final class SelectionOverlayView: UIView {
         case cropping(quad: [CGPoint])
 
         /// 同一形态内的几何变化（拖拽中）只重排不重建，避免打断进行中的手势。
+        ///
+        /// 编号表**委派**给 `SelectionPhase` 的 `shapeTag`（同一份常量），
+        /// 渲染层不再维护第二张同编号的表 —— 两张表一旦漂移就再也对不齐。
         var shapeTag: Int {
             switch self {
-            case .none: return 0
-            case .composite: return 1
-            case .image: return 2
-            case .compositeTransform: return 3
-            case .cropping: return 4
+            case .none: return SelectionPhase.noneShapeTag
+            case .composite: return SelectionPhase.compositeShapeTag
+            case .image: return SelectionPhase.imageShapeTag
+            case .compositeTransform: return SelectionPhase.compositeTransformShapeTag
+            case .cropping: return SelectionPhase.croppingShapeTag
             }
         }
 
@@ -57,7 +60,7 @@ final class SelectionOverlayView: UIView {
             if !isLassoActive {
                 lassoPoints.removeAll()
                 lassoLayer.path = nil
-                isCapturingLasso = false
+                lassoCapturePhase = .idle
             }
         }
     }
@@ -74,7 +77,11 @@ final class SelectionOverlayView: UIView {
     private let pivotLayer = CAShapeLayer()
     private var handleViews: [SelectionHandleView] = []
     private var lassoPoints: [CGPoint] = []
-    private var isCapturingLasso = false
+    /// 套索捕获相位的**单一真值**（取代裸 bool `isCapturingLasso`）。
+    ///
+    /// 它是「一次触摸是否正在画套索」的生命周期状态，归渲染层自持，
+    /// 因而不并入容器层的 `InteractionPhase`（见 `LassoCapturePhase` 注释）。
+    private var lassoCapturePhase: LassoCapturePhase = .idle
     /// 自绘浮动菜单（替代系统编辑菜单，见 `SelectionMenuView` 顶部注释）。
     private var menuView: SelectionMenuView?
     private var menuActions: [SelectionAction] = []
@@ -583,9 +590,9 @@ final class SelectionOverlayView: UIView {
         }
 
         // 触摸类型必须在这里判定：`UITouch.type` 在 touchesBegan 是可靠的，
-        // 而 `UIEvent.allTouches` 在 hitTest 阶段不可靠。
+        // 而 `UIEvent` 的**全量触摸集合**在 hitTest 阶段不可靠（初次落笔常常取不到该触摸）。
         guard touch.type == .pencil || allowsFingerLasso else {
-            isCapturingLasso = false
+            lassoCapturePhase = .idle
             lassoPoints.removeAll()
             lassoLayer.path = nil
             return
@@ -596,19 +603,19 @@ final class SelectionOverlayView: UIView {
         // 已有选区时，从选区内部开始的触摸**不产生新套索**
         // （否则拖动/按压选中对象会立刻画出一个新选区，手一松就把原选择替换掉）。
         if let rect = compositeRect, rect.insetBy(dx: -8, dy: -8).contains(location) {
-            isCapturingLasso = false
+            lassoCapturePhase = .idle
             lassoPoints.removeAll()
             lassoLayer.path = nil
             return
         }
 
-        isCapturingLasso = true
+        lassoCapturePhase = .capturing
         lassoPoints = [location]
         updateLassoLayer()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard isLassoActive, isCapturingLasso, let touch = touches.first else {
+        guard isLassoActive, lassoCapturePhase.isCapturing, let touch = touches.first else {
             super.touchesMoved(touches, with: event)
             return
         }
@@ -621,11 +628,11 @@ final class SelectionOverlayView: UIView {
             super.touchesEnded(touches, with: event)
             return
         }
-        guard isCapturingLasso else {
-            isCapturingLasso = false
+        guard lassoCapturePhase.isCapturing else {
+            lassoCapturePhase = .idle
             return
         }
-        isCapturingLasso = false
+        lassoCapturePhase = .idle
         let path = lassoPoints
         lassoPoints = []
         lassoLayer.path = nil
@@ -638,7 +645,7 @@ final class SelectionOverlayView: UIView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        isCapturingLasso = false
+        lassoCapturePhase = .idle
         lassoPoints = []
         lassoLayer.path = nil
         super.touchesCancelled(touches, with: event)

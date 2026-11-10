@@ -106,23 +106,32 @@ struct PageRepository {
 
     @discardableResult
     func addPage(to day: DayRecord) -> DrawingPage {
-        let index = (day.pages.map(\.index).max() ?? -1) + 1
+        let index = PageOrderPolicy.nextIndex(after: day.pages.map(\.index))
         let page = DrawingPage(index: index, dayKey: day.key, drawingFile: AppPaths.newFileName(extension: "drawing"))
         context.insert(page)
         page.day = day
-        day.updatedAt = .now
-        day.syncPageCount()
-        try? context.save()
+        commitPageOrder(PageOrderPolicy.sorted(day.pages, index: \.index), in: day, touch: true)
         return page
     }
 
     /// 按给定顺序重排页面：index 即位置，Page 1 自动成为月历封面。
     func applyPageOrder(_ ordered: [DrawingPage], in day: DayRecord) {
-        for (position, page) in ordered.enumerated() where page.index != position {
-            page.index = position
+        commitPageOrder(ordered, in: day, touch: true)
+    }
+
+    /// `pageCount` 冗余缓存的**唯一写入漏斗**：归一化页序（0..<count）+ 同步页数 + 落库。
+    ///
+    /// 所有会改动 `pages` 关系的入口（`addPage` / `applyPageOrder` / `deletePage`→`reindex`）
+    /// 都经这里，`ensureCoverPage` 也间接经它（它只委派给 `addPage`）。
+    /// `touch` 保持与原行为一致：只有 `addPage` / `applyPageOrder` 推进 `updatedAt`，
+    /// `reindex` 不推进 —— 删除页不是“内容变更”，不该把 `updatedAt` 顶上去。
+    private func commitPageOrder(_ ordered: [DrawingPage], in day: DayRecord, touch: Bool) {
+        for entry in PageOrderPolicy.normalized(ordered) where entry.item.index != entry.index {
+            entry.item.index = entry.index
         }
-        day.syncPageCount()
-        day.updatedAt = .now
+        // 唯一允许直接写 pageCount 的出口（另一处白名单见 backfillPageCountsIfNeeded）。
+        day.pageCount = ordered.count
+        if touch { day.updatedAt = .now }
         try? context.save()
     }
 
@@ -185,12 +194,7 @@ struct PageRepository {
 
     /// 删除页面后重排索引（Page 1 语义必须保持连续）。
     func reindex(_ day: DayRecord) {
-        let ordered = day.pages.sorted { $0.index < $1.index }
-        for (index, page) in ordered.enumerated() where page.index != index {
-            page.index = index
-        }
-        day.syncPageCount()
-        try? context.save()
+        commitPageOrder(PageOrderPolicy.sorted(day.pages, index: \.index), in: day, touch: false)
     }
 
     // MARK: - 笔迹
@@ -319,7 +323,7 @@ struct PageRepository {
         // 不看 `coverPage` 就会把当天的封面图错删。
         let wasCover = page.day?.coverPage?.uuid == page.uuid
         ThumbnailStore.shared.forget(page.pageSlot, fileName: page.thumbnailFileName)
-        if wasCover {
+        if PageOrderPolicy.requiresCoverReassignment(deletedIsCover: wasCover) {
             ThumbnailStore.shared.forget(page.coverSlot, fileName: page.thumbnailFileName)
         }
     }

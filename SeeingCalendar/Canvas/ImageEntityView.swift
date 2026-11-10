@@ -20,18 +20,19 @@ final class ImageEntityView: UIImageView {
     var onEndMove: ((ImageEntityView) -> Void)?
 
     private var sourceImage: UIImage
-    private var gestureBase: CGAffineTransform?
-    private var gestureStartPoint: CGPoint?
+
+    /// 单指拖动的**单一真值**。
+    ///
+    /// 取代旧的 5 个扁平字段（`isMoving` / `gestureBase` / `gestureStartPoint` /
+    /// `hasLeftDeadZone` / `gestureStartWindow`）：合法状态只有三态，交给类型表达，
+    /// 分支里不再需要「字段是否同时成立」的防御式 `guard`。
+    private(set) var dragPhase: DragPhase = .idle
 
     /// 是否正在被拖动。拖拽期间严禁重挂载（removeFromSuperview 会取消进行中的手势）。
-    private(set) var isMoving = false
-
-    /// 起始死区（屏幕点）：吃掉误触与触摸抖动，退出死区时重新锚定，因此不会产生跳变。
-    private static let dragDeadZone: CGFloat = 3
-    /// 亚像素更新阈值（世界点）：手指几乎静止时不做无意义重排；始终以基点为参考，不会丢位移。
-    private static let dragEpsilon: CGFloat = 0.5
-    private var hasLeftDeadZone = false
-    private var gestureStartWindow: CGPoint = .zero
+    ///
+    /// 只读计算投影：既有调用点（`CompositeCanvasContainerView` 的 `guard !entity.isMoving`）
+    /// 零改动，语义与旧存储旗标逐位等价（`.began` 之后到 `.ended` 之前皆为真）。
+    var isMoving: Bool { dragPhase.isMoving }
 
     init(item: CanvasImageItem) {
         self.itemID = item.id
@@ -191,48 +192,42 @@ final class ImageEntityView: UIImageView {
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
-            // 必须先置位：onSelect 会触发“选中置顶”，此时若重挂载会立刻打断本手势。
-            isMoving = true
-            gestureBase = worldTransform
             // 基点模型：首触点为锚，之后一律「当前点 − 基点」求位移，不做增量累加（避免误差累积）。
-            gestureStartPoint = gesture.location(in: superview)
-            gestureStartWindow = gesture.location(in: window ?? superview ?? self)
-            hasLeftDeadZone = false
+            // 窗口锚点单独保留，专供死区判定 —— 死区用窗口坐标度量，不受画布 zoomScale 影响。
+            let windowAnchor = gesture.location(in: window ?? superview ?? self)
+            dragPhase = DragPolicy.reduce(dragPhase,
+                                          event: .began(base: worldTransform,
+                                                        anchor: gesture.location(in: superview),
+                                                        windowAnchor: windowAnchor))
+            // 必须先置位（dragPhase 已置为 armed，isMoving 随之转真）再回调 onSelect：
+            // onSelect 会触发“选中置顶”重挂载，此时若重挂载会立刻打断本手势。
             onSelect?(self)
             onBeginMove?(self)
         case .changed:
-            guard let base = gestureBase, let parent = superview, var start = gestureStartPoint else { return }
+            guard let parent = superview else { return }
             let current = gesture.location(in: parent)
+            let windowPoint = gesture.location(in: window ?? parent)
 
-            // 去抖 ①：起始死区。在手势刚成立时忽略极小位移，避免误触/抖动；
-            //          退出死区时把基点重锚到当前位置 —— 因此死区不会造成任何跳变。
-            if !hasLeftDeadZone {
-                let reference = window ?? parent
-                let windowPoint = gesture.location(in: reference)
-                let travel = hypot(windowPoint.x - gestureStartWindow.x, windowPoint.y - gestureStartWindow.y)
-                guard travel >= Self.dragDeadZone else { return }
-                hasLeftDeadZone = true
-                gestureStartPoint = current
-                start = current
-            }
+            // 死区判定与重锚都收进相位机：armed 未出死区原样返回，出死区则重锚并转 dragging。
+            let next = DragPolicy.reduce(dragPhase, event: .moved(anchor: current, windowAnchor: windowPoint))
+            dragPhase = next
+            // 只有「已出死区」的 dragging 才产生位移；idle / armed 一律跳过。
+            guard case .dragging(let base, let anchor) = next else { return }
 
-            // 位移 = 当前点 − 基点，两个点都取自**画布世界坐标系**：
+            // 位移 = 当前点 − 锚点，两个点都取自**画布世界坐标系**：
             // 因此天然免受画布 zoomScale、图元自身缩放/旋转的影响（比值恒为 1）。
-            let delta = CGPoint(x: current.x - start.x, y: current.y - start.y)
+            let delta = DragPolicy.translation(anchor: current, from: anchor)
 
-            // 去抖 ②：亚像素过滤。手指近乎静止时不触发重排；
-            //          因为位移始终相对基点计算，所以不会像增量式实现那样丢失位移。
-            guard abs(delta.x) > Self.dragEpsilon || abs(delta.y) > Self.dragEpsilon else { return }
+            // 亚像素过滤：手指近乎静止时不触发重排；
+            //           因为位移始终相对锚点计算，所以不会像增量式实现那样丢失位移。
+            guard DragPolicy.exceedsEpsilon(delta) else { return }
 
             worldTransform = base.applyingWorldDelta(.worldTranslation(delta))
             applyWorldTransform()
             onTransformChanged?(self)
         case .ended, .cancelled, .failed:
-            // 先复位再回调：容器会在 onEndMove 里补做延迟的“置顶重挂载”。
-            isMoving = false
-            gestureBase = nil
-            gestureStartPoint = nil
-            hasLeftDeadZone = false
+            // 先复位（回到 idle，isMoving 随之转假）再回调：容器会在 onEndMove 里补做延迟的“置顶重挂载”。
+            dragPhase = DragPolicy.reduce(dragPhase, event: .ended)
             onEndMove?(self)
         default:
             break
