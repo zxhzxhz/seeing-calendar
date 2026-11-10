@@ -1,6 +1,9 @@
 # Xcode / build output
 build/
 DerivedData/
+
+# 本地编译产物（本机 macOS VM 出的未签名 ipa / dSYM / 日志）
+artifacts/
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
